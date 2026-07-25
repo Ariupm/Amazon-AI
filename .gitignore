@@ -42,3 +42,5 @@ next-env.d.ts
 /work/
 /amazon_scraper/.chrome-profile/
 *.scrape.json
+__pycache__/
+*.pyc
