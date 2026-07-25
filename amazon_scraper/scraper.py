@@ -330,12 +330,30 @@ async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: i
                 child_asins = list(dict.fromkeys(v.asin for v in candidates))
                 if not child_asins:
                     warnings.append("识别为父体，但页面未暴露可访问的子体 ASIN。")
+                collected_actual_asins: set[str] = set()
                 for child_asin in child_asins:
                     try:
-                        await page.goto(f"{base_url}/dp/{child_asin}", wait_until="domcontentloaded", timeout=60_000)
+                        # th=1&psc=1 asks Amazon to keep the requested child selected
+                        # instead of silently falling back to the family's default child.
+                        child_url = f"{base_url}/dp/{child_asin}?th=1&psc=1"
+                        await page.goto(child_url, wait_until="domcontentloaded", timeout=60_000)
                         await _challenge(page, headless, f"子体 {child_asin}")
                         await page.wait_for_timeout(750)
-                        child_snapshots.append(await _snapshot(page, base_url, child_asin))
+                        snapshot = await _snapshot(page, base_url, child_asin)
+                        actual_child_asin = snapshot["asin"]
+                        if actual_child_asin in collected_actual_asins:
+                            warnings.append(
+                                f"子体 {child_asin} 被 Amazon 重定向到已采集的 "
+                                f"{actual_child_asin}，已跳过重复页面。"
+                            )
+                            continue
+                        if actual_child_asin != child_asin:
+                            warnings.append(
+                                f"请求子体 {child_asin} 时 Amazon 实际返回 "
+                                f"{actual_child_asin}，结果按实际页面记录。"
+                            )
+                        collected_actual_asins.add(actual_child_asin)
+                        child_snapshots.append(snapshot)
                     except Exception as error:
                         warnings.append(f"子体 {child_asin} 采集失败：{error}")
             else:
