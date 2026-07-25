@@ -9,11 +9,23 @@ from pydantic import BaseModel, Field
 class Variant(BaseModel):
     asin: str
     attributes: dict[str, str] = Field(default_factory=dict)
+    color: str | None = None
+    size: str | None = None
     title: str | None = None
     price: str | None = None
+    list_price: str | None = None
+    discount: str | None = None
+    promotion: str | None = None
     availability: str | None = None
+    rating: float | None = None
+    rating_count: int | None = None
+    recent_sales_signal: str | None = None
     image: str | None = None
+    images: list[str] = Field(default_factory=list)
+    bullets: list[str] = Field(default_factory=list)
     url: str
+    data_quality: Literal["complete", "partial"] = "partial"
+    warnings: list[str] = Field(default_factory=list)
 
 
 class Review(BaseModel):
@@ -42,6 +54,7 @@ class ProductResult(BaseModel):
     requested_asin: str
     asin: str
     parent_asin: str | None = None
+    is_parent_request: bool = False
     marketplace: str
     source_url: str
     canonical_url: str | None = None
@@ -70,3 +83,24 @@ class ScrapeRequest(BaseModel):
     marketplace: Literal["US", "UK", "DE", "JP"] = "US"
     max_review_pages: int = Field(default=2, ge=0, le=10)
     headless: bool = False
+
+
+class BatchScrapeRequest(BaseModel):
+    asins: list[str] = Field(min_length=1, max_length=100)
+    marketplace: Literal["US", "UK", "DE", "JP"] = "US"
+    max_review_pages: int = Field(default=2, ge=0, le=10)
+    headless: bool = False
+
+
+class BatchItemResult(BaseModel):
+    requested_asin: str
+    success: bool
+    result: ProductResult | None = None
+    error: str | None = None
+
+
+class BatchResult(BaseModel):
+    items: list[BatchItemResult]
+    total: int
+    succeeded: int
+    failed: int

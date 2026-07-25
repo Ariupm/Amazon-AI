@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,20 +57,24 @@ def _rating(text: str | None) -> float | None:
     return float(match.group(1).replace(",", ".")) if match else None
 
 
-async def _challenge(page: Page, headless: bool) -> None:
+async def _challenge(page: Page, headless: bool, purpose: str = "商品页面") -> None:
     title = (await page.title()).lower()
     body = (await page.locator("body").inner_text()).lower()
     challenged = "robot check" in title or "enter the characters you see below" in body or "sorry, we just need to make sure" in body
-    if not challenged:
+    sign_in = "/ap/signin" in page.url or await page.locator("#ap_email, form[name='signIn']").count() > 0
+    if not challenged and not sign_in:
         return
     if headless:
-        raise ScrapeError("Amazon 返回验证码，请改用可见浏览器模式并手动完成验证。")
-    print("Amazon 要求验证码/登录，请在 Chrome 中完成；程序最多等待 5 分钟。")
-    for _ in range(150):
+        raise ScrapeError(f"Amazon 的{purpose}要求验证码或登录，请使用可见浏览器模式并手动完成。")
+    print(f"Amazon 的{purpose}要求验证码/登录。Chrome 会保持打开，请完成操作；程序最多等待 15 分钟。")
+    for _ in range(450):
         await asyncio.sleep(2)
         title = (await page.title()).lower()
         body = (await page.locator("body").inner_text()).lower()
-        if "robot check" not in title and "enter the characters you see below" not in body:
+        sign_in = "/ap/signin" in page.url or await page.locator("#ap_email, form[name='signIn']").count() > 0
+        if "robot check" not in title and "enter the characters you see below" not in body and not sign_in:
+            await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(1000)
             return
     raise ScrapeError("等待人工验证超时。")
 
@@ -91,18 +96,126 @@ async def _extract_variants(page: Page, base_url: str) -> list[Variant]:
             image=image,
             url=f"{base_url}/dp/{asin}",
         )
-    # Amazon frequently embeds variation maps in page JSON even when not all choices are rendered.
+    # Amazon frequently embeds this exact child map when not every option is rendered.
     html = await page.content()
-    for match in re.finditer(r'"([A-Z0-9]{10})"\s*:\s*\[([^\]]*)\]', html):
-        asin, values = match.groups()
-        if asin not in variants:
-            options = [part.strip(' "') for part in values.split(",") if part.strip(' "')]
-            variants[asin] = Variant(
-                asin=asin,
-                attributes={"option": " / ".join(options)} if options else {},
-                url=f"{base_url}/dp/{asin}",
-            )
+    match = re.search(r'"dimensionValuesDisplayData"\s*:\s*(\{.*?\})\s*,\s*"', html)
+    if match:
+        try:
+            for asin, values in json.loads(match.group(1)).items():
+                if re.fullmatch(r"[A-Z0-9]{10}", asin) and asin not in variants:
+                    variants[asin] = Variant(
+                        asin=asin,
+                        attributes={"option": " / ".join(str(v) for v in values)},
+                        url=f"{base_url}/dp/{asin}",
+                    )
+        except json.JSONDecodeError:
+            pass
     return list(variants.values())
+
+
+async def _image_urls(page: Page) -> list[str]:
+    images: list[str] = []
+    for node in await page.locator("#landingImage, #imgTagWrapperId img, #altImages img").all():
+        candidates = [
+            await node.get_attribute("data-old-hires"),
+            await node.get_attribute("data-a-hires"),
+            await node.get_attribute("src"),
+        ]
+        dynamic = await node.get_attribute("data-a-dynamic-image")
+        if dynamic:
+            try:
+                candidates = list(json.loads(dynamic).keys()) + candidates
+            except json.JSONDecodeError:
+                pass
+        for src in candidates:
+            if not src or "sprite" in src or "play-button" in src:
+                continue
+            src = re.sub(r"\._[^.]+_\.", ".", src)
+            if src not in images:
+                images.append(src)
+    return images
+
+
+async def _variation_attributes(page: Page) -> tuple[str | None, str | None, dict[str, str]]:
+    attributes: dict[str, str] = {}
+    for feature in ["color_name", "size_name", "style_name", "pattern_name", "item_package_quantity"]:
+        value = await _text(page, [
+            f"#variation_{feature} .selection",
+            f"#variation_{feature} .a-dropdown-prompt",
+        ])
+        if value:
+            attributes[feature.replace("_name", "").replace("_", " ").title()] = value
+    color = attributes.get("Color")
+    size = attributes.get("Size")
+    # Some layouts expose selected attributes only in the product details table.
+    if not color or not size:
+        rows = page.locator("#productDetails_detailBullets_sections1 tr, #productDetails_techSpec_section_1 tr")
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            key = re.sub(r"\s+", " ", (await row.locator("th").inner_text())).strip() if await row.locator("th").count() else ""
+            value = re.sub(r"\s+", " ", (await row.locator("td").inner_text())).strip() if await row.locator("td").count() else ""
+            if key and value:
+                if not color and "color" in key.lower():
+                    color = value
+                    attributes["Color"] = value
+                if not size and ("size" in key.lower() or "dimension" in key.lower()):
+                    size = value
+                    attributes["Size"] = value
+    return color, size, attributes
+
+
+async def _parent_asin(page: Page) -> str | None:
+    if await page.locator("input[name='parentASIN']").count():
+        value = await page.locator("input[name='parentASIN']").first.get_attribute("value")
+        if value and re.fullmatch(r"[A-Z0-9]{10}", value):
+            return value
+    html = await page.content()
+    for pattern in [r'"parentAsin"\s*:\s*"([A-Z0-9]{10})"', r'"parentASIN"\s*:\s*"([A-Z0-9]{10})"']:
+        match = re.search(pattern, html)
+        if match:
+            return match.group(1)
+    return None
+
+
+async def _snapshot(page: Page, base_url: str, asin: str) -> dict:
+    title = await _text(page, ["#productTitle", "#title"])
+    if not title:
+        raise ScrapeError(f"未识别到子体 {asin} 的商品标题。")
+    actual_asin = await page.locator("#ASIN").get_attribute("value") if await page.locator("#ASIN").count() else asin
+    actual_asin = actual_asin or asin
+    price = await _text(page, [".priceToPay .a-offscreen", "#corePrice_feature_div .a-offscreen", "#priceblock_ourprice", "#price_inside_buybox"])
+    list_price = await _text(page, [
+        "#corePriceDisplay_desktop_feature_div .basisPrice .a-offscreen",
+        "#corePrice_feature_div .a-price.a-text-price .a-offscreen",
+        ".a-price[data-a-strike='true'] .a-offscreen",
+        ".basisPrice .a-offscreen",
+    ])
+    if not list_price:
+        typical = page.get_by_text(re.compile(r"Typical price:", re.I)).first
+        if await typical.count():
+            container = typical.locator("xpath=..")
+            list_price = await _text(container, [".a-offscreen"])  # type: ignore[arg-type]
+    color, size, attributes = await _variation_attributes(page)
+    sales = await _text(page, ["#social-proofing-faceout-title-tk_bought", "#social-proofing-faceout-title"])
+    if not sales:
+        sales_node = page.get_by_text(re.compile(r"(bought|purchased).*(past|last) month", re.I)).first
+        if await sales_node.count():
+            sales = re.sub(r"\s+", " ", (await sales_node.inner_text())).strip()
+    images = await _image_urls(page)
+    rating_text = await _text(page, ["#acrPopover", "[data-hook='rating-out-of-text']"])
+    rating_count_text = await _text(page, ["#acrCustomerReviewText"])
+    availability = await _text(page, ["#availability", "#outOfStock"])
+    return {
+        "asin": actual_asin, "title": title, "price": price, "list_price": list_price,
+        "discount": await _text(page, [".savingsPercentage", "#regularprice_savings"]),
+        "promotion": await _text(page, ["#couponTextpctch", "#promoPriceBlockMessage_feature_div", "#dealBadge_feature_div"]),
+        "availability": availability, "rating": _rating(rating_text),
+        "rating_count": _number(rating_count_text), "recent_sales_signal": sales,
+        "image": images[0] if images else None, "images": images,
+        "bullets": await _texts(page, "#feature-bullets li span.a-list-item"),
+        "color": color, "size": size, "attributes": attributes,
+        "url": f"{base_url}/dp/{actual_asin}",
+    }
 
 
 async def _reviews_on_page(page: Page) -> list[Review]:
@@ -144,12 +257,28 @@ async def _collect_reviews(context: BrowserContext, base_url: str, asin: str, pa
         return []
     page = await context.new_page()
     collected: dict[str, Review] = {}
+    login_attempted = False
     try:
         for number in range(1, pages + 1):
-            await page.goto(f"{base_url}/product-reviews/{asin}/?sortBy=recent&pageNumber={number}", wait_until="domcontentloaded", timeout=60_000)
-            await _challenge(page, headless)
+            review_url = f"{base_url}/product-reviews/{asin}/?sortBy=recent&pageNumber={number}"
+            await page.goto(review_url, wait_until="domcontentloaded", timeout=60_000)
+            await _challenge(page, headless, "评论页面")
             await page.wait_for_timeout(900)
-            for review in await _reviews_on_page(page):
+            page_reviews = await _reviews_on_page(page)
+            # Amazon often returns an empty review shell to signed-out users instead
+            # of redirecting to /ap/signin. In visible mode, open login and wait.
+            account_text = await _text(page, ["#nav-link-accountList-nav-line-1"])
+            signed_out = bool(account_text and "sign in" in account_text.lower())
+            if not page_reviews and signed_out and not headless and not login_attempted:
+                login_attempted = True
+                await page.locator("#nav-link-accountList").click()
+                await page.wait_for_load_state("domcontentloaded")
+                await _challenge(page, headless, "Amazon 登录")
+                await page.goto(review_url, wait_until="domcontentloaded", timeout=60_000)
+                await _challenge(page, headless, "评论页面")
+                await page.wait_for_timeout(1000)
+                page_reviews = await _reviews_on_page(page)
+            for review in page_reviews:
                 collected[f"{review.title}|{review.body}"] = review
             if not await page.locator("li.a-last:not(.a-disabled) a").count():
                 break
@@ -186,56 +315,62 @@ async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: i
             await page.goto(source_url, wait_until="domcontentloaded", timeout=60_000)
             await _challenge(page, headless)
             await page.wait_for_timeout(1100)
-            title = await _text(page, ["#productTitle", "#title"])
-            if not title:
-                raise ScrapeError(f"未识别到商品 {asin}。请检查 ASIN、站点，或在 Chrome 中完成人工验证。")
-
-            actual_asin = await page.locator("#ASIN").get_attribute("value") if await page.locator("#ASIN").count() else asin
-            actual_asin = actual_asin or asin
-            parent_asin = await page.locator("input[name='parentASIN']").get_attribute("value") if await page.locator("input[name='parentASIN']").count() else None
+            initial = await _snapshot(page, base_url, asin)
+            actual_asin = initial["asin"]
+            parent_asin = await _parent_asin(page)
+            is_parent_request = parent_asin == asin
             canonical = await page.locator("link[rel='canonical']").get_attribute("href") if await page.locator("link[rel='canonical']").count() else None
-            price = await _text(page, [".priceToPay .a-offscreen", "#corePrice_feature_div .a-offscreen", "#priceblock_ourprice", "#price_inside_buybox"])
-            list_price = await _text(page, [".basisPrice .a-offscreen", ".a-price.a-text-price .a-offscreen"])
-            discount = await _text(page, [".savingsPercentage", "#regularprice_savings"])
-            promotion = await _text(page, ["#couponTextpctch", "#promoPriceBlockMessage_feature_div", "#dealBadge_feature_div"])
-            availability = await _text(page, ["#availability", "#outOfStock"])
-            rating_text = await _text(page, ["#acrPopover", "[data-hook='rating-out-of-text']"])
-            rating_count_text = await _text(page, ["#acrCustomerReviewText"])
-            recent_sales = await _text(page, ["#social-proofing-faceout-title-tk_bought", "#social-proofing-faceout-title"])
             brand = await _text(page, ["#bylineInfo"])
             if brand:
                 brand = re.sub(r"^(Visit the |Brand:\s*)| Store$", "", brand, flags=re.I)
 
-            images: list[str] = []
-            for node in await page.locator("#altImages img, #landingImage").all():
-                src = await node.get_attribute("data-old-hires") or await node.get_attribute("src")
-                if src:
-                    src = re.sub(r"\._[^.]+_\.", ".", src)
-                    if src not in images:
-                        images.append(src)
-            bullets = await _texts(page, "#feature-bullets li span.a-list-item")
-            variants = await _extract_variants(page, base_url)
-            if not variants:
-                variants = [Variant(asin=actual_asin, title=title, price=price, availability=availability, image=images[0] if images else None, url=f"{base_url}/dp/{actual_asin}")]
-                warnings.append("未检测到父子变体，结果按单 ASIN 返回。")
-            for variant in variants:
-                if variant.asin == actual_asin:
-                    variant.title, variant.price, variant.availability = title, price, availability
-                    variant.image = variant.image or (images[0] if images else None)
+            child_snapshots: list[dict] = []
+            if is_parent_request:
+                candidates = await _extract_variants(page, base_url)
+                child_asins = list(dict.fromkeys(v.asin for v in candidates))
+                if not child_asins:
+                    warnings.append("识别为父体，但页面未暴露可访问的子体 ASIN。")
+                for child_asin in child_asins:
+                    try:
+                        await page.goto(f"{base_url}/dp/{child_asin}", wait_until="domcontentloaded", timeout=60_000)
+                        await _challenge(page, headless, f"子体 {child_asin}")
+                        await page.wait_for_timeout(750)
+                        child_snapshots.append(await _snapshot(page, base_url, child_asin))
+                    except Exception as error:
+                        warnings.append(f"子体 {child_asin} 采集失败：{error}")
+            else:
+                child_snapshots = [initial]
 
-            reviews = await _collect_reviews(context, base_url, actual_asin, max_review_pages, headless)
+            variants = [
+                Variant(
+                    asin=item["asin"], attributes=item["attributes"], color=item["color"],
+                    size=item["size"], title=item["title"], price=item["price"],
+                    list_price=item["list_price"], discount=item["discount"],
+                    promotion=item["promotion"], availability=item["availability"],
+                    rating=item["rating"], rating_count=item["rating_count"],
+                    recent_sales_signal=item["recent_sales_signal"], image=item["image"],
+                    images=item["images"], bullets=item["bullets"], url=item["url"],
+                    data_quality="complete" if item["title"] and item["image"] and (item["price"] or item["availability"]) else "partial",
+                    warnings=[],
+                )
+                for item in child_snapshots
+            ]
+            root = child_snapshots[0] if child_snapshots else initial
+            review_asin = root["asin"]
+            reviews = await _collect_reviews(context, base_url, review_asin, max_review_pages, headless)
             if not reviews:
-                warnings.append("未读取到评论；Amazon 可能要求登录，或该商品暂无可访问评论。")
+                warnings.append("登录后仍未读取到评论；该商品可能暂无可访问评论，或 Amazon 当前限制了评论页。")
             return ProductResult(
-                requested_asin=asin, asin=actual_asin, parent_asin=parent_asin,
+                requested_asin=asin, asin=asin if is_parent_request else root["asin"],
+                parent_asin=parent_asin, is_parent_request=is_parent_request,
                 marketplace=marketplace, source_url=source_url, canonical_url=canonical,
-                title=title, brand=brand, price=price, list_price=list_price,
-                discount=discount, promotion=promotion, availability=availability,
-                rating=_rating(rating_text), rating_count=_number(rating_count_text),
-                recent_sales_signal=recent_sales, images=images, bullets=bullets,
+                title=root["title"], brand=brand, price=root["price"], list_price=root["list_price"],
+                discount=root["discount"], promotion=root["promotion"], availability=root["availability"],
+                rating=root["rating"], rating_count=root["rating_count"],
+                recent_sales_signal=root["recent_sales_signal"], images=root["images"], bullets=root["bullets"],
                 variants=variants, reviews=reviews, insights=analyze_reviews(reviews),
                 collected_at=datetime.now(timezone.utc),
-                data_quality="complete" if price and images and bullets else "partial",
+                data_quality="complete" if variants and all(v.data_quality == "complete" for v in variants) else "partial",
                 warnings=warnings,
             )
         finally:

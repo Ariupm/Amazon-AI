@@ -7,14 +7,15 @@
     <section class="hero">
       <div><span class="eyebrow">AMAZON REAL DATA</span><h1>真实商品数据采集器</h1><p>浏览器实际访问 Amazon 页面。只有读取到真实商品标题才会返回结果，不生成模拟内容。</p></div>
       <form id="form">
-        <label>商品 ASIN<input id="asin" maxlength="10" pattern="[A-Za-z0-9]{10}" placeholder="输入真实的 10 位 ASIN" required></label>
+        <label class="asinField">商品 ASIN（支持批量）<textarea id="asins" placeholder="每行一个，或用逗号分隔&#10;B0CT1NWL9J" required></textarea><small id="asinCount">0 个 ASIN</small></label>
         <label>站点<select id="market"><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select></label>
         <label>评论页数<select id="pages"><option>1</option><option selected>2</option><option>3</option><option>5</option></select></label>
         <button id="submit">开始真实采集</button>
       </form>
-      <div class="notice">首次运行会打开 Chrome。若出现验证码或登录提示，请直接在该窗口手动完成，不要关闭浏览器。</div>
+      <div class="notice">首次运行会打开 Chrome。若评论页要求登录，请在该窗口完成登录；程序会保持等待最多 15 分钟，不要关闭浏览器。</div>
     </section>
     <section id="status" class="status hidden"></section>
+    <section id="batchSummary" class="batchSummary hidden"></section>
     <section id="result" class="hidden"></section>
   </main>
   <script src="/static/app.js"></script>
