@@ -1,0 +1,1 @@
+"""Local Amazon product scraper."""

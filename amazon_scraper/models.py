@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class Variant(BaseModel):
+    asin: str
+    attributes: dict[str, str] = Field(default_factory=dict)
+    title: str | None = None
+    price: str | None = None
+    availability: str | None = None
+    image: str | None = None
+    url: str
+
+
+class Review(BaseModel):
+    rating: float | None = None
+    title: str | None = None
+    body: str
+    date: str | None = None
+    verified: bool = False
+    variant: str | None = None
+    url: str | None = None
+
+
+class Insight(BaseModel):
+    phrase: str
+    mentions: int
+    evidence: list[str] = Field(default_factory=list)
+
+
+class ReviewInsights(BaseModel):
+    advantages: list[Insight] = Field(default_factory=list)
+    pains: list[Insight] = Field(default_factory=list)
+    analyzed_reviews: int = 0
+
+
+class ProductResult(BaseModel):
+    requested_asin: str
+    asin: str
+    parent_asin: str | None = None
+    marketplace: str
+    source_url: str
+    canonical_url: str | None = None
+    title: str
+    brand: str | None = None
+    price: str | None = None
+    list_price: str | None = None
+    discount: str | None = None
+    promotion: str | None = None
+    availability: str | None = None
+    rating: float | None = None
+    rating_count: int | None = None
+    recent_sales_signal: str | None = None
+    images: list[str] = Field(default_factory=list)
+    bullets: list[str] = Field(default_factory=list)
+    variants: list[Variant] = Field(default_factory=list)
+    reviews: list[Review] = Field(default_factory=list)
+    insights: ReviewInsights = Field(default_factory=ReviewInsights)
+    collected_at: datetime
+    data_quality: Literal["complete", "partial"]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ScrapeRequest(BaseModel):
+    asin: str = Field(pattern=r"^[A-Za-z0-9]{10}$")
+    marketplace: Literal["US", "UK", "DE", "JP"] = "US"
+    max_review_pages: int = Field(default=2, ge=0, le=10)
+    headless: bool = False
