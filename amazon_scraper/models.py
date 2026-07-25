@@ -76,6 +76,7 @@ class ProductResult(BaseModel):
     collected_at: datetime
     data_quality: Literal["complete", "partial"]
     warnings: list[str] = Field(default_factory=list)
+    expected_child_count: int | None = None
 
 
 class ScrapeRequest(BaseModel):

@@ -81,7 +81,15 @@ async def _challenge(page: Page, headless: bool, purpose: str = "商品页面") 
 
 async def _extract_variants(page: Page, base_url: str) -> list[Variant]:
     variants: dict[str, Variant] = {}
-    nodes = page.locator("#twister li[data-asin], #twister_feature_div li[data-asin], [data-csa-c-asin]")
+    # Never query [data-csa-c-asin] globally: Amazon uses it for carousels,
+    # recommendations and sponsored products across the entire page.
+    nodes = page.locator(
+        "#twister li[data-asin], "
+        "#twister_feature_div li[data-asin], "
+        "#twister_feature_div [data-csa-c-asin], "
+        "#variation_color_name li[data-asin], "
+        "#variation_size_name li[data-asin]"
+    )
     for index in range(await nodes.count()):
         node = nodes.nth(index)
         asin = (await node.get_attribute("data-asin") or await node.get_attribute("data-csa-c-asin") or "").strip()
@@ -352,8 +360,14 @@ async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: i
                 brand = re.sub(r"^(Visit the |Brand:\s*)| Store$", "", brand, flags=re.I)
 
             child_snapshots: list[dict] = []
+            expected_child_count = 1
             if is_parent_request:
                 candidates = await _extract_variants(page, base_url)
+                if len(candidates) > 250:
+                    raise ScrapeError(
+                        f"父体解析出异常数量的候选子体（{len(candidates)} 个），"
+                        "为避免误抓推荐商品，任务已停止。"
+                    )
                 # Visit one size group at a time. Amazon's native ASIN order can
                 # alternate S/M/L across colors and later return to S again.
                 candidates.sort(key=lambda variant: (
@@ -363,6 +377,7 @@ async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: i
                     variant.asin,
                 ))
                 child_asins = list(dict.fromkeys(v.asin for v in candidates))
+                expected_child_count = len(child_asins)
                 if not child_asins:
                     warnings.append("识别为父体，但页面未暴露可访问的子体 ASIN。")
                 collected_actual_asins: set[str] = set()
@@ -424,7 +439,7 @@ async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: i
                 variants=variants, reviews=reviews, insights=analyze_reviews(reviews),
                 collected_at=datetime.now(timezone.utc),
                 data_quality="complete" if variants and all(v.data_quality == "complete" for v in variants) else "partial",
-                warnings=warnings,
+                warnings=warnings, expected_child_count=expected_child_count,
             )
         finally:
             await context.close()

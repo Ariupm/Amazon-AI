@@ -21,7 +21,7 @@ function renderBatch(batch){
 }
 function renderProduct(d){
   const advantages=d.insights.advantages.map(insight).join("")||"<p class='empty'>真实评论不足，暂时无法形成优点分析。</p>",pains=d.insights.pains.map(insight).join("")||"<p class='empty'>真实低星评论不足，暂时无法形成痛点分析。</p>";
-  return `<section class="productResult"><div class="resultLabel"><span>${d.is_parent_request?"父体任务 · 已展开全部子体":"子体任务 · 仅采集当前子体"}</span><b>${esc(d.requested_asin)}</b></div>
+  return `<section class="productResult"><div class="resultLabel"><span>${d.is_parent_request?`父体任务 · 计划 ${d.expected_child_count??d.variants.length} 个，完成 ${d.variants.length} 个`:"子体任务 · 仅采集当前子体"}</span><b>${esc(d.requested_asin)}</b></div>
   <article class="product"><div class="image">${d.images[0]?`<img src="${esc(d.images[0])}" alt="">`:"<span>暂无图片</span>"}</div><div><div class="source"><span>真实来源</span><a target="_blank" rel="noreferrer" href="${esc(d.canonical_url||d.source_url)}">${esc(d.asin)} ↗</a></div><h2>${esc(d.title)}</h2><div class="facts"><b>${esc(d.price||"价格未展示")}</b>${d.list_price?`<del>Typical price: ${esc(d.list_price)}</del>`:""}<span>★ ${esc(d.rating??"—")} · ${esc(d.rating_count??"—")} 条评分</span><span>${esc(d.recent_sales_signal||"月销量信号未展示")}</span></div><ul>${d.bullets.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div></article>
   ${d.warnings.length?`<div class="warnings">${d.warnings.map(x=>`<span>! ${esc(x)}</span>`).join("")}</div>`:""}
   <div class="sectionHead"><div><h2>${d.is_parent_request?"全部真实子体":"当前子体信息"}</h2><p>每条数据均来自对应子体详情页</p></div><b>${d.variants.length} 个</b></div>
