@@ -8,7 +8,7 @@ form.addEventListener("submit",async e=>{
   statusBox.className="status loading";statusBox.innerHTML=`<b>正在逐个访问 Amazon…</b><span>共 ${asins.length} 个 ASIN；父体会继续采集全部子体，请留意 Chrome 登录窗口。</span>`;
   resultBox.className="hidden";summaryBox.className="hidden";button.disabled=true;
   try{
-    const r=await fetch("/api/scrape/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({asins,marketplace:document.querySelector("#market").value,max_review_pages:Number(document.querySelector("#pages").value),headless:false})});
+    const r=await fetch("/api/scrape/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({asins,marketplace:document.querySelector("#market").value,max_review_pages:Number(document.querySelector("#pages").value),headless:false,variant_mode:document.querySelector("#variantMode").value})});
     const p=await r.json();if(!r.ok)throw new Error(p.detail||"采集失败");latestBatch=p;renderBatch(p);
     statusBox.className="status success";statusBox.innerHTML=`<b>✓ 批量采集完成</b><span>成功 ${p.succeeded} · 失败 ${p.failed} · 所有展示字段均来自本次真实页面</span>`;
   }catch(err){statusBox.className="status error";statusBox.innerHTML=`<b>采集未成功</b><span>${esc(err.message)}</span>`}finally{button.disabled=false}

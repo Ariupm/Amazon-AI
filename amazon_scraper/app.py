@@ -32,7 +32,10 @@ async def scrape(request: ScrapeRequest):
         raise HTTPException(status_code=409, detail="已有采集任务正在运行，请等待完成。")
     async with lock:
         try:
-            return await scrape_product(request.asin, request.marketplace, request.max_review_pages, request.headless)
+            return await scrape_product(
+                request.asin, request.marketplace, request.max_review_pages,
+                request.headless, request.variant_mode,
+            )
         except ScrapeError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except Exception as error:
@@ -53,7 +56,10 @@ async def scrape_batch(request: BatchScrapeRequest) -> BatchResult:
                 items.append(BatchItemResult(requested_asin=asin, success=False, error="ASIN 格式错误"))
                 continue
             try:
-                result = await scrape_product(asin, request.marketplace, request.max_review_pages, request.headless)
+                result = await scrape_product(
+                    asin, request.marketplace, request.max_review_pages,
+                    request.headless, request.variant_mode,
+                )
                 items.append(BatchItemResult(requested_asin=asin, success=True, result=result))
             except Exception as error:
                 items.append(BatchItemResult(requested_asin=asin, success=False, error=str(error)))

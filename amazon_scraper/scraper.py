@@ -323,7 +323,13 @@ async def _collect_reviews(context: BrowserContext, base_url: str, asin: str, pa
     return list(collected.values())
 
 
-async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: int = 2, headless: bool = False) -> ProductResult:
+async def scrape_product(
+    asin: str,
+    marketplace: str = "US",
+    max_review_pages: int = 2,
+    headless: bool = False,
+    variant_mode: str = "fast",
+) -> ProductResult:
     asin = asin.upper()
     if not re.fullmatch(r"[A-Z0-9]{10}", asin):
         raise ScrapeError("ASIN 必须是 10 位字母或数字。")
@@ -360,14 +366,10 @@ async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: i
                 brand = re.sub(r"^(Visit the |Brand:\s*)| Store$", "", brand, flags=re.I)
 
             child_snapshots: list[dict] = []
+            fast_variants: list[Variant] | None = None
             expected_child_count = 1
             if is_parent_request:
                 candidates = await _extract_variants(page, base_url)
-                if len(candidates) > 250:
-                    raise ScrapeError(
-                        f"父体解析出异常数量的候选子体（{len(candidates)} 个），"
-                        "为避免误抓推荐商品，任务已停止。"
-                    )
                 # Visit one size group at a time. Amazon's native ASIN order can
                 # alternate S/M/L across colors and later return to S again.
                 candidates.sort(key=lambda variant: (
@@ -380,36 +382,58 @@ async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: i
                 expected_child_count = len(child_asins)
                 if not child_asins:
                     warnings.append("识别为父体，但页面未暴露可访问的子体 ASIN。")
-                collected_actual_asins: set[str] = set()
-                for child_asin in child_asins:
-                    try:
-                        # th=1&psc=1 asks Amazon to keep the requested child selected
-                        # instead of silently falling back to the family's default child.
-                        child_url = f"{base_url}/dp/{child_asin}?th=1&psc=1"
-                        await page.goto(child_url, wait_until="domcontentloaded", timeout=60_000)
-                        await _challenge(page, headless, f"子体 {child_asin}")
-                        await page.wait_for_timeout(750)
-                        snapshot = await _snapshot(page, base_url, child_asin)
-                        actual_child_asin = snapshot["asin"]
-                        if actual_child_asin in collected_actual_asins:
-                            warnings.append(
-                                f"子体 {child_asin} 被 Amazon 重定向到已采集的 "
-                                f"{actual_child_asin}，已跳过重复页面。"
-                            )
-                            continue
-                        if actual_child_asin != child_asin:
-                            warnings.append(
-                                f"请求子体 {child_asin} 时 Amazon 实际返回 "
-                                f"{actual_child_asin}，结果按实际页面记录。"
-                            )
-                        collected_actual_asins.add(actual_child_asin)
-                        child_snapshots.append(snapshot)
-                    except Exception as error:
-                        warnings.append(f"子体 {child_asin} 采集失败：{error}")
+                if variant_mode == "fast":
+                    fast_variants = []
+                    for candidate in candidates:
+                        if candidate.asin == initial["asin"]:
+                            candidate.title = initial["title"]
+                            candidate.price = initial["price"]
+                            candidate.list_price = initial["list_price"]
+                            candidate.discount = initial["discount"]
+                            candidate.promotion = initial["promotion"]
+                            candidate.availability = initial["availability"]
+                            candidate.rating = initial["rating"]
+                            candidate.rating_count = initial["rating_count"]
+                            candidate.recent_sales_signal = initial["recent_sales_signal"]
+                            candidate.image = candidate.image or initial["image"]
+                            candidate.images = initial["images"]
+                            candidate.bullets = initial["bullets"]
+                        candidate.data_quality = "partial"
+                        fast_variants.append(candidate)
+                    child_snapshots = [initial]
+                    warnings.append(
+                        f"已使用极速清单模式读取 {len(fast_variants)} 个子体；"
+                        "未逐页打开的子体不会编造价格、月销量或高清主图。"
+                    )
+                else:
+                    collected_actual_asins: set[str] = set()
+                    for child_asin in child_asins:
+                        try:
+                            child_url = f"{base_url}/dp/{child_asin}?th=1&psc=1"
+                            await page.goto(child_url, wait_until="domcontentloaded", timeout=60_000)
+                            await _challenge(page, headless, f"子体 {child_asin}")
+                            await page.wait_for_timeout(750)
+                            snapshot = await _snapshot(page, base_url, child_asin)
+                            actual_child_asin = snapshot["asin"]
+                            if actual_child_asin in collected_actual_asins:
+                                warnings.append(
+                                    f"子体 {child_asin} 被 Amazon 重定向到已采集的 "
+                                    f"{actual_child_asin}，已跳过重复页面。"
+                                )
+                                continue
+                            if actual_child_asin != child_asin:
+                                warnings.append(
+                                    f"请求子体 {child_asin} 时 Amazon 实际返回 "
+                                    f"{actual_child_asin}，结果按实际页面记录。"
+                                )
+                            collected_actual_asins.add(actual_child_asin)
+                            child_snapshots.append(snapshot)
+                        except Exception as error:
+                            warnings.append(f"子体 {child_asin} 采集失败：{error}")
             else:
                 child_snapshots = [initial]
 
-            variants = [
+            variants = fast_variants or [
                 Variant(
                     asin=item["asin"], attributes=item["attributes"], color=item["color"],
                     size=item["size"], title=item["title"], price=item["price"],

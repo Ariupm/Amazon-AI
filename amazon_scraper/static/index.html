@@ -6,13 +6,14 @@
   <main>
     <section class="hero">
       <div><span class="eyebrow">AMAZON REAL DATA</span><h1>真实商品数据采集器</h1><p>浏览器实际访问 Amazon 页面。只有读取到真实商品标题才会返回结果，不生成模拟内容。</p></div>
-      <form id="form">
+      <form id="form" style="max-width:980px;grid-template-columns:2.2fr .65fr .65fr .8fr 1fr">
         <label class="asinField">商品 ASIN（支持批量）<textarea id="asins" placeholder="每行一个，或用逗号分隔&#10;B0CT1NWL9J" required></textarea><small id="asinCount">0 个 ASIN</small></label>
         <label>站点<select id="market"><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select></label>
         <label>评论页数<select id="pages"><option>1</option><option selected>2</option><option>3</option><option>5</option></select></label>
+        <label>变体模式<select id="variantMode"><option value="fast" selected>极速清单</option><option value="full">完整逐子体</option></select></label>
         <button id="submit">开始真实采集</button>
       </form>
-      <div class="notice">首次运行会打开 Chrome。若评论页要求登录，请在该窗口完成登录；程序会保持等待最多 15 分钟，不要关闭浏览器。</div>
+      <div class="notice">默认“极速清单”不会逐个打开全部子体；只有主动选择“完整逐子体”才会采集每个子体的实时价格、月销量和高清主图。</div>
     </section>
     <section id="status" class="status hidden"></section>
     <section id="batchSummary" class="batchSummary hidden"></section>
