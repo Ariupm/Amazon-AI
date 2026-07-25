@@ -57,12 +57,37 @@ def _rating(text: str | None) -> float | None:
     return float(match.group(1).replace(",", ".")) if match else None
 
 
+async def _auth_pending(page: Page) -> bool:
+    """Return True for every known step in Amazon's sign-in/MFA flow."""
+    if page.is_closed():
+        return False
+    url = page.url.lower()
+    auth_selectors = (
+        "#ap_email, #ap_password, #auth-mfa-otpcode, #cvf-input-code, "
+        "input[name='otpCode'], input[name='code'], "
+        "input[autocomplete='one-time-code'], form[name='signIn']"
+    )
+    if "/ap/" in url or "/ax/" in url or await page.locator(auth_selectors).count() > 0:
+        return True
+    body = (await page.locator("body").inner_text()).lower()
+    code_prompts = (
+        "enter the code",
+        "enter code",
+        "verification code",
+        "one-time password",
+        "one time password",
+        "approve the notification",
+    )
+    title = (await page.title()).lower()
+    return ("verify" in title or "authentication" in title) and any(prompt in body for prompt in code_prompts)
+
+
 async def _challenge(page: Page, headless: bool, purpose: str = "商品页面") -> None:
     title = (await page.title()).lower()
     body = (await page.locator("body").inner_text()).lower()
     challenged = "robot check" in title or "enter the characters you see below" in body or "sorry, we just need to make sure" in body
-    sign_in = "/ap/signin" in page.url or await page.locator("#ap_email, form[name='signIn']").count() > 0
-    if not challenged and not sign_in:
+    auth_pending = await _auth_pending(page)
+    if not challenged and not auth_pending:
         return
     if headless:
         raise ScrapeError(f"Amazon 的{purpose}要求验证码或登录，请使用可见浏览器模式并手动完成。")
@@ -73,8 +98,13 @@ async def _challenge(page: Page, headless: bool, purpose: str = "商品页面") 
             raise ScrapeError("等待登录期间浏览器页面被关闭，任务已停止。")
         title = (await page.title()).lower()
         body = (await page.locator("body").inner_text()).lower()
-        sign_in = "/ap/signin" in page.url or await page.locator("#ap_email, form[name='signIn']").count() > 0
-        if "robot check" not in title and "enter the characters you see below" not in body and not sign_in:
+        auth_pending = await _auth_pending(page)
+        if "robot check" not in title and "enter the characters you see below" not in body and not auth_pending:
+            # Authentication pages can briefly disappear between the password
+            # and OTP redirects. Require a short stable non-authenticated period.
+            await asyncio.sleep(2)
+            if await _auth_pending(page):
+                continue
             await page.wait_for_load_state("domcontentloaded")
             await page.wait_for_timeout(1000)
             return

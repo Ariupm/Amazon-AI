@@ -19,7 +19,7 @@ python -m pip install -r amazon_scraper/requirements.txt
 python -m amazon_scraper.cli B012345678 --marketplace US --review-pages 2 --output product.scrape.json
 ```
 
-- 首次出现验证码或登录时，在程序打开的 Chrome 中手动完成。程序不设固定登录超时，检测到登录完成后才继续；手动关闭登录页面会终止该任务。
+- 首次出现验证码或登录时，在程序打开的 Chrome 中手动完成。邮箱、密码、Enter code、一次性验证码和 MFA 都视为登录未完成；程序不设固定登录超时，真正离开认证流程后才继续。手动关闭登录页面会终止该任务。
 - 输入父体 ASIN 时会逐个打开并采集全部可识别子体；输入子体 ASIN 时只采集该子体。
 - 父体页会先一次性读取子体 ASIN 和变体组合；只有价格、主图、库存、Typical price、月销量等动态字段需要逐子体打开。相同尺寸的不同颜色仍是不同子体。
 - 子体访问按实际 ASIN 去重；若 Amazon 将多个链接重定向到同一商品，只保留一次并在警告中说明。
