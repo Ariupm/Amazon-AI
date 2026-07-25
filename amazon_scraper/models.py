@@ -84,7 +84,7 @@ class ScrapeRequest(BaseModel):
     marketplace: Literal["US", "UK", "DE", "JP"] = "US"
     max_review_pages: int = Field(default=2, ge=0, le=10)
     headless: bool = False
-    variant_mode: Literal["fast", "full"] = "fast"
+    variant_mode: Literal["fast", "full"] = "full"
 
 
 class BatchScrapeRequest(BaseModel):
@@ -92,7 +92,7 @@ class BatchScrapeRequest(BaseModel):
     marketplace: Literal["US", "UK", "DE", "JP"] = "US"
     max_review_pages: int = Field(default=2, ge=0, le=10)
     headless: bool = False
-    variant_mode: Literal["fast", "full"] = "fast"
+    variant_mode: Literal["fast", "full"] = "full"
 
 
 class BatchItemResult(BaseModel):

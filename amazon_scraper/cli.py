@@ -13,7 +13,7 @@ def main() -> None:
     parser.add_argument("--marketplace", default="US", choices=["US", "UK", "DE", "JP"])
     parser.add_argument("--review-pages", type=int, default=2)
     parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--variant-mode", default="fast", choices=["fast", "full"])
+    parser.add_argument("--variant-mode", default="full", choices=["fast", "full"])
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     result = asyncio.run(scrape_product(

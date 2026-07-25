@@ -66,9 +66,11 @@ async def _challenge(page: Page, headless: bool, purpose: str = "商品页面") 
         return
     if headless:
         raise ScrapeError(f"Amazon 的{purpose}要求验证码或登录，请使用可见浏览器模式并手动完成。")
-    print(f"Amazon 的{purpose}要求验证码/登录。Chrome 会保持打开，请完成操作；程序最多等待 15 分钟。")
-    for _ in range(450):
+    print(f"Amazon 的{purpose}要求验证码/登录。Chrome 会保持打开，登录完成后程序才会继续。")
+    while True:
         await asyncio.sleep(2)
+        if page.is_closed():
+            raise ScrapeError("等待登录期间浏览器页面被关闭，任务已停止。")
         title = (await page.title()).lower()
         body = (await page.locator("body").inner_text()).lower()
         sign_in = "/ap/signin" in page.url or await page.locator("#ap_email, form[name='signIn']").count() > 0
@@ -76,7 +78,6 @@ async def _challenge(page: Page, headless: bool, purpose: str = "商品页面") 
             await page.wait_for_load_state("domcontentloaded")
             await page.wait_for_timeout(1000)
             return
-    raise ScrapeError("等待人工验证超时。")
 
 
 async def _extract_variants(page: Page, base_url: str) -> list[Variant]:
@@ -328,7 +329,7 @@ async def scrape_product(
     marketplace: str = "US",
     max_review_pages: int = 2,
     headless: bool = False,
-    variant_mode: str = "fast",
+    variant_mode: str = "full",
 ) -> ProductResult:
     asin = asin.upper()
     if not re.fullmatch(r"[A-Z0-9]{10}", asin):
