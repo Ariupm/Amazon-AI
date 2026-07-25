@@ -98,14 +98,41 @@ async def _extract_variants(page: Page, base_url: str) -> list[Variant]:
         )
     # Amazon frequently embeds this exact child map when not every option is rendered.
     html = await page.content()
+    dimension_names: list[str] = []
+    values_match = re.search(r'"variationValues"\s*:\s*(\{.*?\})\s*,\s*"', html)
+    if values_match:
+        try:
+            raw_dimensions = json.loads(values_match.group(1))
+            dimension_names = [
+                name.replace("_name", "").replace("_", " ").title()
+                for name in raw_dimensions.keys()
+            ]
+        except json.JSONDecodeError:
+            pass
+
     match = re.search(r'"dimensionValuesDisplayData"\s*:\s*(\{.*?\})\s*,\s*"', html)
     if match:
         try:
             for asin, values in json.loads(match.group(1)).items():
-                if re.fullmatch(r"[A-Z0-9]{10}", asin) and asin not in variants:
+                if not re.fullmatch(r"[A-Z0-9]{10}", asin):
+                    continue
+                attributes = {
+                    (dimension_names[index] if index < len(dimension_names) else f"Option {index + 1}"): str(value)
+                    for index, value in enumerate(values)
+                }
+                attributes["option"] = " / ".join(str(value) for value in values)
+                if asin in variants:
+                    # The DOM often exposes only the currently rendered dimension.
+                    # Embedded data contains the complete size/color combination.
+                    variants[asin].attributes.update(attributes)
+                    variants[asin].color = attributes.get("Color")
+                    variants[asin].size = attributes.get("Size")
+                else:
                     variants[asin] = Variant(
                         asin=asin,
-                        attributes={"option": " / ".join(str(v) for v in values)},
+                        attributes=attributes,
+                        color=attributes.get("Color"),
+                        size=attributes.get("Size"),
                         url=f"{base_url}/dp/{asin}",
                     )
         except json.JSONDecodeError:
@@ -327,6 +354,14 @@ async def scrape_product(asin: str, marketplace: str = "US", max_review_pages: i
             child_snapshots: list[dict] = []
             if is_parent_request:
                 candidates = await _extract_variants(page, base_url)
+                # Visit one size group at a time. Amazon's native ASIN order can
+                # alternate S/M/L across colors and later return to S again.
+                candidates.sort(key=lambda variant: (
+                    (variant.size or variant.attributes.get("Size") or "").casefold(),
+                    (variant.color or variant.attributes.get("Color") or "").casefold(),
+                    variant.attributes.get("option", "").casefold(),
+                    variant.asin,
+                ))
                 child_asins = list(dict.fromkeys(v.asin for v in candidates))
                 if not child_asins:
                     warnings.append("识别为父体，但页面未暴露可访问的子体 ASIN。")
