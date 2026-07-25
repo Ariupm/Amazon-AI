@@ -247,7 +247,8 @@ async def _snapshot(page: Page, base_url: str, asin: str) -> dict:
     title = await _text(page, ["#productTitle", "#title"])
     if not title:
         raise ScrapeError(f"未识别到子体 {asin} 的商品标题。")
-    actual_asin = await page.locator("#ASIN").get_attribute("value") if await page.locator("#ASIN").count() else asin
+    asin_nodes = page.locator("form#addToCart input#ASIN, #buybox input#ASIN, input#ASIN")
+    actual_asin = await asin_nodes.first.get_attribute("value") if await asin_nodes.count() else asin
     actual_asin = actual_asin or asin
     price = await _text(page, [".priceToPay .a-offscreen", "#corePrice_feature_div .a-offscreen", "#priceblock_ourprice", "#price_inside_buybox"])
     list_price = await _text(page, [
@@ -354,147 +355,177 @@ async def _collect_reviews(context: BrowserContext, base_url: str, asin: str, pa
     return list(collected.values())
 
 
+class BrowserSession:
+    """One Chrome process shared by every ASIN in a batch."""
+
+    def __init__(self, marketplace: str, headless: bool):
+        self.marketplace = marketplace
+        self.headless = headless
+        self.playwright = None
+        self.context: BrowserContext | None = None
+
+    async def __aenter__(self) -> "BrowserSession":
+        _, locale = MARKETPLACES[self.marketplace]
+        chrome = next((path for path in CHROME_PATHS if path.exists()), None)
+        if not chrome:
+            raise ScrapeError("未找到 Google Chrome。")
+        profile = Path(__file__).parent / ".chrome-profile"
+        profile.mkdir(exist_ok=True)
+        self.playwright = await async_playwright().start()
+        self.context = await self.playwright.chromium.launch_persistent_context(
+            user_data_dir=str(profile),
+            executable_path=str(chrome),
+            headless=self.headless,
+            locale=locale,
+            viewport={"width": 1440, "height": 1000},
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        if self.context:
+            await self.context.close()
+        if self.playwright:
+            await self.playwright.stop()
+
+
+async def _scrape_in_context(
+    context: BrowserContext,
+    asin: str,
+    marketplace: str,
+    max_review_pages: int,
+    headless: bool,
+    variant_mode: str,
+) -> ProductResult:
+    asin = asin.upper()
+    if not re.fullmatch(r"[A-Z0-9]{10}", asin):
+        raise ScrapeError("ASIN 必须是 10 位字母或数字。")
+    base_url, _ = MARKETPLACES[marketplace]
+    page = context.pages[0] if context.pages else await context.new_page()
+    source_url = f"{base_url}/dp/{asin}"
+    warnings: list[str] = []
+
+    await page.goto(source_url, wait_until="domcontentloaded", timeout=60_000)
+    await _challenge(page, headless)
+    await page.wait_for_timeout(1100)
+    initial = await _snapshot(page, base_url, asin)
+    parent_asin = await _parent_asin(page)
+    is_parent_request = parent_asin == asin
+    canonical_node = page.locator("link[rel='canonical']").first
+    canonical = await canonical_node.get_attribute("href") if await canonical_node.count() else None
+    brand = await _text(page, ["#bylineInfo"])
+    if brand:
+        brand = re.sub(r"^(Visit the |Brand:\s*)| Store$", "", brand, flags=re.I)
+
+    child_snapshots: list[dict] = []
+    fast_variants: list[Variant] | None = None
+    expected_child_count = 1
+    if is_parent_request:
+        candidates = await _extract_variants(page, base_url)
+        candidates.sort(key=lambda variant: (
+            (variant.size or variant.attributes.get("Size") or "").casefold(),
+            (variant.color or variant.attributes.get("Color") or "").casefold(),
+            variant.attributes.get("option", "").casefold(),
+            variant.asin,
+        ))
+        child_asins = list(dict.fromkeys(v.asin for v in candidates))
+        expected_child_count = len(child_asins)
+        if not child_asins:
+            warnings.append("识别为父体，但页面未暴露可访问的子体 ASIN。")
+        if variant_mode == "fast":
+            fast_variants = []
+            for candidate in candidates:
+                if candidate.asin == initial["asin"]:
+                    for key in (
+                        "title", "price", "list_price", "discount", "promotion",
+                        "availability", "rating", "rating_count",
+                        "recent_sales_signal", "image", "images", "bullets",
+                    ):
+                        setattr(candidate, key, initial[key])
+                candidate.data_quality = "partial"
+                fast_variants.append(candidate)
+            child_snapshots = [initial]
+            warnings.append(
+                f"已使用极速清单模式读取 {len(fast_variants)} 个子体；"
+                "未逐页打开的子体不会编造价格、月销量或高清主图。"
+            )
+        else:
+            collected_actual_asins: set[str] = set()
+            for child_asin in child_asins:
+                try:
+                    await page.goto(
+                        f"{base_url}/dp/{child_asin}?th=1&psc=1",
+                        wait_until="domcontentloaded", timeout=60_000,
+                    )
+                    await _challenge(page, headless, f"子体 {child_asin}")
+                    await page.wait_for_timeout(750)
+                    snapshot = await _snapshot(page, base_url, child_asin)
+                    actual_child_asin = snapshot["asin"]
+                    if actual_child_asin in collected_actual_asins:
+                        warnings.append(
+                            f"子体 {child_asin} 被 Amazon 重定向到已采集的 "
+                            f"{actual_child_asin}，已跳过重复页面。"
+                        )
+                        continue
+                    if actual_child_asin != child_asin:
+                        warnings.append(
+                            f"请求子体 {child_asin} 时 Amazon 实际返回 "
+                            f"{actual_child_asin}，结果按实际页面记录。"
+                        )
+                    collected_actual_asins.add(actual_child_asin)
+                    child_snapshots.append(snapshot)
+                except Exception as error:
+                    warnings.append(f"子体 {child_asin} 采集失败：{error}")
+    else:
+        child_snapshots = [initial]
+
+    variants = fast_variants or [
+        Variant(
+            asin=item["asin"], attributes=item["attributes"], color=item["color"],
+            size=item["size"], title=item["title"], price=item["price"],
+            list_price=item["list_price"], discount=item["discount"],
+            promotion=item["promotion"], availability=item["availability"],
+            rating=item["rating"], rating_count=item["rating_count"],
+            recent_sales_signal=item["recent_sales_signal"], image=item["image"],
+            images=item["images"], bullets=item["bullets"], url=item["url"],
+            data_quality="complete" if item["title"] and item["image"] and (item["price"] or item["availability"]) else "partial",
+            warnings=[],
+        )
+        for item in child_snapshots
+    ]
+    root = child_snapshots[0] if child_snapshots else initial
+    reviews = await _collect_reviews(context, base_url, root["asin"], max_review_pages, headless)
+    if not reviews:
+        warnings.append("登录后仍未读取到评论；该商品可能暂无可访问评论，或 Amazon 当前限制了评论页。")
+    return ProductResult(
+        requested_asin=asin, asin=asin if is_parent_request else root["asin"],
+        parent_asin=parent_asin, is_parent_request=is_parent_request,
+        marketplace=marketplace, source_url=source_url, canonical_url=canonical,
+        title=root["title"], brand=brand, price=root["price"], list_price=root["list_price"],
+        discount=root["discount"], promotion=root["promotion"], availability=root["availability"],
+        rating=root["rating"], rating_count=root["rating_count"],
+        recent_sales_signal=root["recent_sales_signal"], images=root["images"], bullets=root["bullets"],
+        variants=variants, reviews=reviews, insights=analyze_reviews(reviews),
+        collected_at=datetime.now(timezone.utc),
+        data_quality="complete" if variants and all(v.data_quality == "complete" for v in variants) else "partial",
+        warnings=warnings, expected_child_count=expected_child_count,
+    )
+
+
 async def scrape_product(
     asin: str,
     marketplace: str = "US",
     max_review_pages: int = 2,
     headless: bool = False,
     variant_mode: str = "full",
+    context: BrowserContext | None = None,
 ) -> ProductResult:
-    asin = asin.upper()
-    if not re.fullmatch(r"[A-Z0-9]{10}", asin):
-        raise ScrapeError("ASIN 必须是 10 位字母或数字。")
-    base_url, locale = MARKETPLACES[marketplace]
-    chrome = next((path for path in CHROME_PATHS if path.exists()), None)
-    if not chrome:
-        raise ScrapeError("未找到 Google Chrome。")
-    profile = Path(__file__).parent / ".chrome-profile"
-    profile.mkdir(exist_ok=True)
-
-    async with async_playwright() as playwright:
-        context = await playwright.chromium.launch_persistent_context(
-            user_data_dir=str(profile),
-            executable_path=str(chrome),
-            headless=headless,
-            locale=locale,
-            viewport={"width": 1440, "height": 1000},
-            args=["--disable-blink-features=AutomationControlled"],
+    if context is not None:
+        return await _scrape_in_context(
+            context, asin, marketplace, max_review_pages, headless, variant_mode
         )
-        page = context.pages[0] if context.pages else await context.new_page()
-        source_url = f"{base_url}/dp/{asin}"
-        warnings: list[str] = []
-        try:
-            await page.goto(source_url, wait_until="domcontentloaded", timeout=60_000)
-            await _challenge(page, headless)
-            await page.wait_for_timeout(1100)
-            initial = await _snapshot(page, base_url, asin)
-            actual_asin = initial["asin"]
-            parent_asin = await _parent_asin(page)
-            is_parent_request = parent_asin == asin
-            canonical = await page.locator("link[rel='canonical']").get_attribute("href") if await page.locator("link[rel='canonical']").count() else None
-            brand = await _text(page, ["#bylineInfo"])
-            if brand:
-                brand = re.sub(r"^(Visit the |Brand:\s*)| Store$", "", brand, flags=re.I)
-
-            child_snapshots: list[dict] = []
-            fast_variants: list[Variant] | None = None
-            expected_child_count = 1
-            if is_parent_request:
-                candidates = await _extract_variants(page, base_url)
-                # Visit one size group at a time. Amazon's native ASIN order can
-                # alternate S/M/L across colors and later return to S again.
-                candidates.sort(key=lambda variant: (
-                    (variant.size or variant.attributes.get("Size") or "").casefold(),
-                    (variant.color or variant.attributes.get("Color") or "").casefold(),
-                    variant.attributes.get("option", "").casefold(),
-                    variant.asin,
-                ))
-                child_asins = list(dict.fromkeys(v.asin for v in candidates))
-                expected_child_count = len(child_asins)
-                if not child_asins:
-                    warnings.append("识别为父体，但页面未暴露可访问的子体 ASIN。")
-                if variant_mode == "fast":
-                    fast_variants = []
-                    for candidate in candidates:
-                        if candidate.asin == initial["asin"]:
-                            candidate.title = initial["title"]
-                            candidate.price = initial["price"]
-                            candidate.list_price = initial["list_price"]
-                            candidate.discount = initial["discount"]
-                            candidate.promotion = initial["promotion"]
-                            candidate.availability = initial["availability"]
-                            candidate.rating = initial["rating"]
-                            candidate.rating_count = initial["rating_count"]
-                            candidate.recent_sales_signal = initial["recent_sales_signal"]
-                            candidate.image = candidate.image or initial["image"]
-                            candidate.images = initial["images"]
-                            candidate.bullets = initial["bullets"]
-                        candidate.data_quality = "partial"
-                        fast_variants.append(candidate)
-                    child_snapshots = [initial]
-                    warnings.append(
-                        f"已使用极速清单模式读取 {len(fast_variants)} 个子体；"
-                        "未逐页打开的子体不会编造价格、月销量或高清主图。"
-                    )
-                else:
-                    collected_actual_asins: set[str] = set()
-                    for child_asin in child_asins:
-                        try:
-                            child_url = f"{base_url}/dp/{child_asin}?th=1&psc=1"
-                            await page.goto(child_url, wait_until="domcontentloaded", timeout=60_000)
-                            await _challenge(page, headless, f"子体 {child_asin}")
-                            await page.wait_for_timeout(750)
-                            snapshot = await _snapshot(page, base_url, child_asin)
-                            actual_child_asin = snapshot["asin"]
-                            if actual_child_asin in collected_actual_asins:
-                                warnings.append(
-                                    f"子体 {child_asin} 被 Amazon 重定向到已采集的 "
-                                    f"{actual_child_asin}，已跳过重复页面。"
-                                )
-                                continue
-                            if actual_child_asin != child_asin:
-                                warnings.append(
-                                    f"请求子体 {child_asin} 时 Amazon 实际返回 "
-                                    f"{actual_child_asin}，结果按实际页面记录。"
-                                )
-                            collected_actual_asins.add(actual_child_asin)
-                            child_snapshots.append(snapshot)
-                        except Exception as error:
-                            warnings.append(f"子体 {child_asin} 采集失败：{error}")
-            else:
-                child_snapshots = [initial]
-
-            variants = fast_variants or [
-                Variant(
-                    asin=item["asin"], attributes=item["attributes"], color=item["color"],
-                    size=item["size"], title=item["title"], price=item["price"],
-                    list_price=item["list_price"], discount=item["discount"],
-                    promotion=item["promotion"], availability=item["availability"],
-                    rating=item["rating"], rating_count=item["rating_count"],
-                    recent_sales_signal=item["recent_sales_signal"], image=item["image"],
-                    images=item["images"], bullets=item["bullets"], url=item["url"],
-                    data_quality="complete" if item["title"] and item["image"] and (item["price"] or item["availability"]) else "partial",
-                    warnings=[],
-                )
-                for item in child_snapshots
-            ]
-            root = child_snapshots[0] if child_snapshots else initial
-            review_asin = root["asin"]
-            reviews = await _collect_reviews(context, base_url, review_asin, max_review_pages, headless)
-            if not reviews:
-                warnings.append("登录后仍未读取到评论；该商品可能暂无可访问评论，或 Amazon 当前限制了评论页。")
-            return ProductResult(
-                requested_asin=asin, asin=asin if is_parent_request else root["asin"],
-                parent_asin=parent_asin, is_parent_request=is_parent_request,
-                marketplace=marketplace, source_url=source_url, canonical_url=canonical,
-                title=root["title"], brand=brand, price=root["price"], list_price=root["list_price"],
-                discount=root["discount"], promotion=root["promotion"], availability=root["availability"],
-                rating=root["rating"], rating_count=root["rating_count"],
-                recent_sales_signal=root["recent_sales_signal"], images=root["images"], bullets=root["bullets"],
-                variants=variants, reviews=reviews, insights=analyze_reviews(reviews),
-                collected_at=datetime.now(timezone.utc),
-                data_quality="complete" if variants and all(v.data_quality == "complete" for v in variants) else "partial",
-                warnings=warnings, expected_child_count=expected_child_count,
-            )
-        finally:
-            await context.close()
+    async with BrowserSession(marketplace, headless) as session:
+        assert session.context is not None
+        return await _scrape_in_context(
+            session.context, asin, marketplace, max_review_pages, headless, variant_mode
+        )

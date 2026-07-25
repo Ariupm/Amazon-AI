@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .models import BatchItemResult, BatchResult, BatchScrapeRequest, ScrapeRequest
-from .scraper import ScrapeError, scrape_product
+from .scraper import BrowserSession, ScrapeError, scrape_product
 
 app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.0.0")
 static = Path(__file__).parent / "static"
@@ -51,17 +51,20 @@ async def scrape_batch(request: BatchScrapeRequest) -> BatchResult:
         raise HTTPException(status_code=422, detail="没有可采集的 ASIN。")
     items: list[BatchItemResult] = []
     async with lock:
-        for asin in normalized:
-            if len(asin) != 10 or not asin.isalnum():
-                items.append(BatchItemResult(requested_asin=asin, success=False, error="ASIN 格式错误"))
-                continue
-            try:
-                result = await scrape_product(
-                    asin, request.marketplace, request.max_review_pages,
-                    request.headless, request.variant_mode,
-                )
-                items.append(BatchItemResult(requested_asin=asin, success=True, result=result))
-            except Exception as error:
-                items.append(BatchItemResult(requested_asin=asin, success=False, error=str(error)))
+        async with BrowserSession(request.marketplace, request.headless) as session:
+            assert session.context is not None
+            for asin in normalized:
+                if len(asin) != 10 or not asin.isalnum():
+                    items.append(BatchItemResult(requested_asin=asin, success=False, error="ASIN 格式错误"))
+                    continue
+                try:
+                    result = await scrape_product(
+                        asin, request.marketplace, request.max_review_pages,
+                        request.headless, request.variant_mode,
+                        context=session.context,
+                    )
+                    items.append(BatchItemResult(requested_asin=asin, success=True, result=result))
+                except Exception as error:
+                    items.append(BatchItemResult(requested_asin=asin, success=False, error=str(error)))
     succeeded = sum(item.success for item in items)
     return BatchResult(items=items, total=len(items), succeeded=succeeded, failed=len(items) - succeeded)
