@@ -74,7 +74,7 @@ export default function Home() {
         </a>
         <nav aria-label="主导航">
           <a className="active" href="#workspace">数据采集</a>
-          <a href="#history">采集记录</a>
+          <a href="/titles">标题工作台</a>
         </nav>
         <div className="topActions">
           <button className="iconButton" aria-label="帮助">?</button>
