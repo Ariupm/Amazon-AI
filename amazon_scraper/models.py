@@ -204,3 +204,15 @@ class CompetitorExportItem(BaseModel):
 class CompetitorExportRequest(BaseModel):
     target_asin: str | None = None
     items: list[CompetitorExportItem] = Field(min_length=1, max_length=200)
+
+
+class KeywordFileSummary(BaseModel):
+    filename: str
+    sheet: str
+    valid: bool
+    rows: int = 0
+    keyword_column: str | None = None
+    volume_columns: list[str] = Field(default_factory=list)
+    month_columns: list[str] = Field(default_factory=list)
+    preview: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

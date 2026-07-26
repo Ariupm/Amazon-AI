@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
@@ -11,14 +11,16 @@ from fastapi.staticfiles import StaticFiles
 
 from .models import (
     BatchItemResult, BatchResult, BatchScrapeRequest, CompetitorDiscoverRequest,
-    CompetitorDiscoverResult, CompetitorExportRequest, ScrapeRequest,
+    CompetitorDiscoverResult, CompetitorExportRequest, KeywordFileSummary,
+    ScrapeRequest,
 )
 from .competitors import discover_competitors
 from .excel_export import build_competitors_xlsx, build_products_xlsx
+from .keyword_files import inspect_keyword_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 
-FEATURE_VERSION = "competitor-diversity-v5"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.5.0")
+FEATURE_VERSION = "keyword-workflow-v6"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.6.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -142,3 +144,14 @@ async def export_competitors_xlsx(request: CompetitorExportRequest) -> Streaming
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="amazon-competitor-candidates.xlsx"'},
     )
+
+
+@app.post("/api/keywords/inspect", response_model=KeywordFileSummary)
+async def inspect_keywords(request: Request, filename: str) -> KeywordFileSummary:
+    content = await request.body()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="词库文件不能超过 20 MB。")
+    try:
+        return inspect_keyword_file(filename, content)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
