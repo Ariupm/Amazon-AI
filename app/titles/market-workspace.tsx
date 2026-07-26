@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
+const REQUIRED_BACKEND = "competitor-profile-v4";
 
 type Candidate = {
   asin: string; title: string; url: string; image?: string; price?: string;
@@ -51,6 +52,7 @@ export default function MarketWorkspace() {
   const [searchPages, setSearchPages] = useState(1);
   const [resultLimit, setResultLimit] = useState(24);
   const [candidatePage, setCandidatePage] = useState(1);
+  const [backendVersion, setBackendVersion] = useState("");
   const candidatePageSize = 10;
 
   const selected = useMemo(() => candidates.filter(item => item.selected), [candidates]);
@@ -75,11 +77,26 @@ export default function MarketWorkspace() {
     setConfirmed(false);
   }
 
+  async function ensureCurrentBackend() {
+    let response: Response;
+    try {
+      response = await fetch(`${API}/health?time=${Date.now()}`, { cache: "no-store" });
+    } catch {
+      throw new Error("请先运行本项目中的“启动真实抓取器.bat”。");
+    }
+    const health = await response.json();
+    setBackendVersion(health.version || health.feature_version || "未知");
+    if (!response.ok || health.feature_version !== REQUIRED_BACKEND) {
+      throw new Error("检测到旧版本机抓取器仍占用 8765 端口。请关闭旧抓取器窗口，再重新双击本项目中的“启动真实抓取器.bat”。");
+    }
+  }
+
   async function readProduct(event: FormEvent) {
     event.preventDefault();
     if (!/^[A-Z0-9]{10}$/.test(asin)) return setMessage(`请输入有效的 10 位${taskMode === "new-variant" ? "父体" : "子体"} ASIN。`);
     setLoading("product"); setMessage("正在调用本机 Chrome 读取本品真实资料…");
     try {
+      await ensureCurrentBackend();
       const response = await fetch(`${API}/api/scrape/batch`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ asins: [asin], marketplace, max_review_pages: 0, headless: false, variant_mode: "fast" }),
@@ -98,6 +115,7 @@ export default function MarketWorkspace() {
     if (!/^[A-Z0-9]{10}$/.test(asin)) return setMessage("自动发现需要先输入本品 ASIN。");
     setLoading("discover"); setMessage("正在实际搜索 Amazon，并计算图文相似度…");
     try {
+      await ensureCurrentBackend();
       const response = await fetch(`${API}/api/competitors/discover`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -213,7 +231,7 @@ export default function MarketWorkspace() {
           <div className="factsGrid"><label>类目大词<input value={facts.category} onChange={e => setFacts({...facts, category:e.target.value})} placeholder="例如 Area Rug" /></label><label>材质<input value={facts.material} onChange={e => setFacts({...facts, material:e.target.value})} placeholder="例如 Polyester" /></label><label>风格 / 外观<input value={facts.style} onChange={e => setFacts({...facts, style:e.target.value})} placeholder="例如 Modern Abstract" /></label><label>主要用途<input value={facts.useCase} onChange={e => setFacts({...facts, useCase:e.target.value})} placeholder="例如 Living Room" /></label><label className="wideFact">必须真实具备的卖点<input value={facts.mustHave} onChange={e => setFacts({...facts, mustHave:e.target.value})} placeholder="用逗号分隔，例如 Washable, Non Slip, Low Pile" /></label></div>
         </article>
         <article className="panel discoverPanel">
-          <div className="panelHead"><div><h3>3. 发现并确认真实竞品</h3><p>先识别花型、工艺、纹理和功能；尺寸不进入系统搜索词</p></div><div className="discoverActions"><label>Amazon 翻页<select value={searchPages} onChange={e => setSearchPages(Number(e.target.value))}><option value={1}>1 页</option><option value={2}>2 页</option><option value={3}>3 页</option></select></label><label>最多保留<select value={resultLimit} onChange={e => setResultLimit(Number(e.target.value))}><option value={24}>24 个</option><option value={40}>40 个</option><option value={60}>60 个</option></select></label><button onClick={discover} disabled={loading === "discover" || !product}>{loading === "discover" ? "正在搜索…" : "自动发现疑似竞品"}</button></div></div>
+          <div className="panelHead"><div><h3>3. 发现并确认真实竞品</h3><p>先识别花型、工艺、纹理和功能；尺寸不进入系统搜索词{backendVersion && <em className="backendVersion"> · 本机 v{backendVersion}</em>}</p></div><div className="discoverActions"><label>Amazon 翻页<select value={searchPages} onChange={e => setSearchPages(Number(e.target.value))}><option value={1}>1 页</option><option value={2}>2 页</option><option value={3}>3 页</option></select></label><label>最多保留<select value={resultLimit} onChange={e => setResultLimit(Number(e.target.value))}><option value={24}>24 个</option><option value={40}>40 个</option><option value={60}>60 个</option></select></label><button onClick={discover} disabled={loading === "discover" || !product}>{loading === "discover" ? "正在搜索…" : "自动发现疑似竞品"}</button></div></div>
           <div className="competitorRules"><b>筛选规则</b><span>类目不一致直接排除</span><span>真实属性 35%</span><span>标题特征 30%</span><span>视觉 20%</span><span>价格与市场信号 15%</span><small>视觉分已重新校准，不再因同为室内地毯场景就获得高分。</small></div>
           {discoveryMeta && <div className="discoveryProfile"><div><b>本品特征画像</b><p>{discoveryMeta.features.length ? discoveryMeta.features.join(" · ") : "页面未识别到足够的差异化特征，请补充上方产品事实。"}</p></div><label><b>实际搜索词（可修改后一行一组，再次搜索）</b><textarea value={customQueries} onChange={event => setCustomQueries(event.target.value)} /></label><small>已排除本父体 {discoveryMeta.excluded} 个 ASIN及 {discoveryMeta.sameBrand} 个同品牌搜索结果。修改搜索词后，再点“自动发现疑似竞品”即可重搜。</small></div>}
           <div className="manualCompetitors"><textarea value={manualAsins} onChange={e => setManualAsins(e.target.value)} placeholder={"也可以一行一个批量添加竞品 ASIN\nB0XXXXXXXX\nB0YYYYYYYY"} /><button onClick={addManual} disabled={loading === "manual"}>{loading === "manual" ? "读取中…" : "添加人工竞品"}</button></div>

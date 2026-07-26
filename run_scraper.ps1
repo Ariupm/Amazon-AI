@@ -5,27 +5,30 @@ $port = 8765
 $healthUrl = "http://127.0.0.1:$port/health"
 $openApiUrl = "http://127.0.0.1:$port/openapi.json"
 $pageUrl = "http://127.0.0.1:$port"
+$requiredFeatureVersion = "competitor-profile-v4"
 
-# Reuse a current server, but replace a stale version that lacks the batch API.
+# Reuse only the exact current server. Merely having the batch API is not
+# sufficient because older competitor-discovery code used the same endpoint.
 $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
     Select-Object -First 1
 if ($listener) {
-    $hasBatchApi = $false
+    $isCurrentVersion = $false
     try {
-        $schema = Invoke-RestMethod $openApiUrl -TimeoutSec 3
-        $hasBatchApi = $null -ne $schema.paths."/api/scrape/batch"
+        $health = Invoke-RestMethod $healthUrl -TimeoutSec 3
+        $isCurrentVersion = $health.feature_version -eq $requiredFeatureVersion
     } catch {
-        $hasBatchApi = $false
+        $isCurrentVersion = $false
     }
 
-    if ($hasBatchApi) {
+    if ($isCurrentVersion) {
         Start-Process $pageUrl
-        Write-Host "真实抓取器已经运行，已打开页面。" -ForegroundColor Green
+        Write-Host "最新版真实抓取器已经运行，已打开页面。" -ForegroundColor Green
         exit 0
     }
 
     $oldProcess = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
     if ($oldProcess -and $oldProcess.ProcessName -match "python|uvicorn") {
+        Write-Host "检测到旧版抓取器，正在替换..." -ForegroundColor Yellow
         Stop-Process -Id $oldProcess.Id -Force
         Start-Sleep -Milliseconds 800
     } else {
@@ -47,8 +50,8 @@ try {
             throw "抓取器启动失败，请查看当前窗口中的错误。"
         }
         try {
-            $schema = Invoke-RestMethod $openApiUrl -TimeoutSec 2
-            if ($null -ne $schema.paths."/api/scrape/batch") {
+            $health = Invoke-RestMethod $healthUrl -TimeoutSec 2
+            if ($health.feature_version -eq $requiredFeatureVersion) {
                 $ready = $true
                 break
             }
@@ -60,7 +63,7 @@ try {
         throw "抓取器启动超时。"
     }
     Start-Process $pageUrl
-    Write-Host "真实抓取器已启动。关闭此窗口可停止服务。" -ForegroundColor Green
+    Write-Host "最新版真实抓取器已启动（竞品特征画像 v4）。关闭此窗口可停止服务。" -ForegroundColor Green
     Wait-Process -Id $server.Id
 } finally {
     if (Get-Process -Id $server.Id -ErrorAction SilentlyContinue) {

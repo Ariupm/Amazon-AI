@@ -17,7 +17,8 @@ from .competitors import discover_competitors
 from .excel_export import build_competitors_xlsx, build_products_xlsx
 from .scraper import BrowserSession, ScrapeError, scrape_product
 
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.0.0")
+FEATURE_VERSION = "competitor-profile-v4"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.4.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -49,7 +50,12 @@ async def index() -> FileResponse:
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "mode": "real-browser"}
+    return {
+        "status": "ok",
+        "mode": "real-browser",
+        "feature_version": FEATURE_VERSION,
+        "version": app.version,
+    }
 
 
 @app.post("/api/scrape")

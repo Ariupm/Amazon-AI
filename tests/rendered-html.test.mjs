@@ -71,6 +71,8 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /同品牌搜索结果/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
+  assert.match(workspace, /competitor-profile-v4/);
+  assert.match(workspace, /旧版本机抓取器仍占用 8765 端口/);
   assert.match(html, /卖家精灵关键词表/);
   assert.doesNotMatch(html, /BAGSMART|LOVEVOOK|61\.2K|综合质量/);
 });
@@ -79,4 +81,11 @@ test("renders child bullets with a product fallback", async () => {
   const collector = await readFile(new URL("../app/collector.tsx", import.meta.url), "utf8");
   assert.match(collector, /hero\?\.bullets\?\.length \? hero\.bullets : product\.bullets/);
   assert.match(collector, /bullets\.map/);
+});
+
+test("launcher replaces stale competitor-discovery servers", async () => {
+  const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
+  assert.match(launcher, /competitor-profile-v4/);
+  assert.match(launcher, /检测到旧版抓取器/);
+  assert.doesNotMatch(launcher, /if \(\$hasBatchApi\)/);
 });
