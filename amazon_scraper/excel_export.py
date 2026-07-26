@@ -14,7 +14,7 @@ from .models import BatchResult
 
 
 HEADERS = [
-    "图片", "输入 ASIN", "父体 ASIN", "疑似主销", "子体 ASIN", "标题",
+    "图片", "图片 URL", "输入 ASIN", "父体 ASIN", "疑似主销", "子体 ASIN", "标题",
     "颜色", "尺寸", "当前价格", "Typical price", "折扣", "月销量信号",
     "月销量估算", "评分", "评分数", "库存", "数据完整度", "判断依据",
 ]
@@ -48,13 +48,13 @@ async def build_products_xlsx(batch: BatchResult) -> BytesIO:
     image_urls: list[str | None] = []
     for item in batch.items:
         if not item.success or not item.result:
-            rows.append(("", item.requested_asin, "", "", "", f"采集失败：{item.error or ''}", "", "", "", "", "", "", "", "", "", "", "失败", ""))
+            rows.append(("", "", item.requested_asin, "", "", "", f"采集失败：{item.error or ''}", "", "", "", "", "", "", "", "", "", "", "失败", ""))
             image_urls.append(None)
             continue
         product = item.result
         for variant in product.variants:
             rows.append((
-                "", item.requested_asin, product.parent_asin or "",
+                "", variant.image or "", item.requested_asin, product.parent_asin or "",
                 "是" if variant.is_suspected_main else "否", variant.asin,
                 variant.title or "", variant.color or "", variant.size or "",
                 variant.price or "", variant.list_price or "", variant.discount or "",
@@ -67,7 +67,11 @@ async def build_products_xlsx(batch: BatchResult) -> BytesIO:
 
     semaphore = asyncio.Semaphore(8)
     async with httpx.AsyncClient(
-        headers={"User-Agent": "Mozilla/5.0"},
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Referer": "https://www.amazon.com/",
+        },
         follow_redirects=True,
     ) as client:
         images = await asyncio.gather(*[
@@ -94,7 +98,11 @@ async def build_products_xlsx(batch: BatchResult) -> BytesIO:
     image_streams: list[BytesIO] = []
     for index, image_stream in enumerate(images, start=2):
         sheet.row_dimensions[index].height = 68
-        if sheet.cell(index, 4).value == "是":
+        image_url_cell = sheet.cell(index, 2)
+        if image_url_cell.value:
+            image_url_cell.hyperlink = str(image_url_cell.value)
+            image_url_cell.style = "Hyperlink"
+        if sheet.cell(index, 5).value == "是":
             for cell in sheet[index]:
                 cell.fill = main_fill
         for cell in sheet[index]:
@@ -106,7 +114,7 @@ async def build_products_xlsx(batch: BatchResult) -> BytesIO:
             image.height = 82
             sheet.add_image(image, f"A{index}")
 
-    widths = [14, 15, 15, 11, 15, 54, 18, 16, 14, 16, 12, 24, 14, 10, 12, 22, 12, 38]
+    widths = [14, 42, 15, 15, 11, 15, 54, 18, 16, 14, 16, 12, 24, 14, 10, 12, 22, 12, 38]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
 
