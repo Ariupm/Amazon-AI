@@ -114,3 +114,33 @@ class BatchResult(BaseModel):
     total: int
     succeeded: int
     failed: int
+
+
+class CompetitorDiscoverRequest(BaseModel):
+    asin: str = Field(pattern=r"^[A-Za-z0-9]{10}$")
+    marketplace: Literal["US", "UK", "DE", "JP"] = "US"
+    limit: int = Field(default=12, ge=3, le=24)
+    headless: bool = False
+
+
+class CompetitorCandidate(BaseModel):
+    asin: str
+    title: str
+    url: str
+    image: str | None = None
+    price: str | None = None
+    rating: float | None = None
+    rating_count: int | None = None
+    recent_sales_signal: str | None = None
+    text_similarity: int
+    image_similarity: int | None = None
+    overall_similarity: int
+    source: Literal["amazon_search"] = "amazon_search"
+
+
+class CompetitorDiscoverResult(BaseModel):
+    target_asin: str
+    target_title: str
+    target_image: str | None = None
+    search_query: str
+    candidates: list[CompetitorCandidate] = Field(default_factory=list)

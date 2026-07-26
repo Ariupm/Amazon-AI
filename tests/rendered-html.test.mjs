@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
+async function render(path = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${path}`, {
       headers: { accept: "text/html" },
     }),
     {
@@ -43,6 +43,17 @@ test("keeps the title workspace route available", async () => {
   assert.match(html, /href="\/titles"/);
   assert.match(html, /标题工作台/);
   assert.match(html, /本机真实浏览器模式/);
+});
+
+test("title workspace starts from real inputs without fake competitors", async () => {
+  const response = await render("/titles");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /资料准备与竞品发现/);
+  assert.match(html, /零资料也可以开始/);
+  assert.match(html, /自动发现疑似竞品/);
+  assert.match(html, /卖家精灵关键词表/);
+  assert.doesNotMatch(html, /BAGSMART|LOVEVOOK|61\.2K|综合质量/);
 });
 
 test("renders child bullets with a product fallback", async () => {

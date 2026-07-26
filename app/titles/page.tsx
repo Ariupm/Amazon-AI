@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+export { default } from "./market-workspace";
 
 type Format = "classic" | "split";
 type Keyword = { word: string; tier: "T1" | "T2" | "T3" | "T4"; volume: string; source: string; selected: boolean };
@@ -24,7 +25,7 @@ const competitors = [
 const sizes = ["Classic", "Large"];
 const colors = ["Black", "Beige", "Forest Green", "Navy Blue"];
 
-export default function TitleStudio() {
+function LegacyTitleStudio() {
   const [format, setFormat] = useState<Format>("split");
   const [activeStep, setActiveStep] = useState(1);
   const [keywords, setKeywords] = useState(initialKeywords);

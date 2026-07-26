@@ -9,7 +9,11 @@ from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .models import BatchItemResult, BatchResult, BatchScrapeRequest, ScrapeRequest
+from .models import (
+    BatchItemResult, BatchResult, BatchScrapeRequest, CompetitorDiscoverRequest,
+    CompetitorDiscoverResult, ScrapeRequest,
+)
+from .competitors import discover_competitors
 from .excel_export import build_products_xlsx
 from .scraper import BrowserSession, ScrapeError, scrape_product
 
@@ -100,3 +104,21 @@ async def export_xlsx(batch: BatchResult) -> StreamingResponse:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="amazon-products-with-images.xlsx"'},
     )
+
+
+@app.post("/api/competitors/discover", response_model=CompetitorDiscoverResult)
+async def competitor_discovery(request: CompetitorDiscoverRequest) -> CompetitorDiscoverResult:
+    if lock.locked():
+        raise HTTPException(status_code=409, detail="已有采集任务正在运行，请等待完成。")
+    async with lock:
+        async with BrowserSession(request.marketplace, request.headless) as session:
+            assert session.context is not None
+            try:
+                return await discover_competitors(
+                    session.context, request.asin, request.marketplace,
+                    request.limit, request.headless,
+                )
+            except ScrapeError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=500, detail=f"竞品发现失败：{error}") from error
