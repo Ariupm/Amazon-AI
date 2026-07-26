@@ -55,7 +55,10 @@ async def build_products_xlsx(batch: BatchResult) -> BytesIO:
         for variant in product.variants:
             rows.append((
                 "", variant.image or "", item.requested_asin, product.parent_asin or "",
-                "是" if variant.is_suspected_main else "否", variant.asin,
+                (
+                    "是" if variant.is_suspected_main else "否"
+                ) if product.is_parent_request else "",
+                variant.asin,
                 variant.title or "", variant.color or "", variant.size or "",
                 variant.price or "", variant.list_price or "", variant.discount or "",
                 variant.recent_sales_signal or "", variant.monthly_sales_estimate,
