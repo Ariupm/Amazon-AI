@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -33,6 +34,23 @@ def _numeric(value: object) -> float | None:
         return float(match.group(0).replace(",", ""))
     except ValueError:
         return None
+
+
+def _date_key(value: str, index: int) -> tuple[int, int, int]:
+    numbers = [int(number) for number in re.findall(r"\d+", value)]
+    if len(numbers) >= 2:
+        year, month = numbers[0], numbers[1]
+        if year < 100:
+            year += 2000
+        if 1 <= month <= 12:
+            return year, month, index
+    for pattern in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m", "%Y/%m"):
+        try:
+            parsed = datetime.strptime(value.strip(), pattern)
+            return parsed.year, parsed.month, index
+        except ValueError:
+            pass
+    return 0, 0, index
 
 
 def inspect_keyword_file(filename: str, content: bytes) -> KeywordFileSummary:
@@ -86,29 +104,47 @@ def inspect_keyword_file(filename: str, content: bytes) -> KeywordFileSummary:
             warnings=["前 30 行未找到“关键词 / 搜索词 / Keyword”列。"],
         )
 
+    # Monthly search-volume columns are snapshots. Use the latest dated column;
+    # when dates are absent, the right-most volume column is treated as latest.
+    latest_volume_index = max(
+        volume_indexes,
+        key=lambda index: _date_key(headers[index], index),
+        default=-1,
+    )
+    latest_label = headers[latest_volume_index] if len(volume_indexes) > 1 and latest_volume_index >= 0 else None
     keyword_map: dict[str, KeywordEntry] = {}
+    keyword_dates: dict[str, tuple[int, int, int]] = {}
     for row in rows[header_index + 1:]:
         value = _clean(row[keyword_index] if keyword_index < len(row) else "")
         if not value:
             continue
-        volumes = [
-            numeric for index in volume_indexes
-            if index < len(row) and (numeric := _numeric(row[index])) is not None
-        ]
-        volume = max(volumes) if volumes else None
-        month = next(
+        volume = (
+            _numeric(row[latest_volume_index])
+            if latest_volume_index >= 0 and latest_volume_index < len(row)
+            else None
+        )
+        month = latest_label or next(
             (_clean(row[index]) for index in month_indexes if index < len(row) and _clean(row[index])),
             None,
         )
         key = value.lower()
         current = keyword_map.get(key)
-        if current is None or (volume or 0) > (current.volume or 0):
+        row_date = _date_key(month or "", 0)
+        current_date = keyword_dates.get(key, (0, 0, 0))
+        if current is None or row_date > current_date or (
+            row_date == current_date and (volume or 0) > (current.volume or 0)
+        ):
             keyword_map[key] = KeywordEntry(term=value, volume=volume, month=month)
+            keyword_dates[key] = row_date
 
     keyword_entries = sorted(
         keyword_map.values(),
         key=lambda item: (-(item.volume or 0), item.term.lower()),
     )
+    keyword_entries = [
+        item.model_copy(update={"rank": index})
+        for index, item in enumerate(keyword_entries, start=1)
+    ]
 
     warnings: list[str] = []
     if not volume_indexes:

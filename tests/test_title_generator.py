@@ -44,6 +44,29 @@ class TitleGeneratorTests(unittest.TestCase):
         self.assertTrue(result.candidates)
         self.assertTrue(all(item.full_count <= 200 for item in result.candidates))
 
+    def test_large_size_never_inherits_runner_or_bathroom_category(self):
+        result = generate_titles(TitleGenerateRequest(
+            brand="GENIMO",
+            product_title="GENIMO Soft 2x6 Runner Rug Washable High Low Pile",
+            bullets=["Non slip arch pattern rug."],
+            competitor_titles=["Washable Area Rug for Living Room"],
+            keywords=[
+                KeywordEntry(term="bathroom rugs", volume=100000, rank=1, month="2026-06"),
+                KeywordEntry(term="runner rug", volume=90000, rank=2, month="2026-06"),
+                KeywordEntry(term="area rugs for living room", volume=80000, rank=3, month="2026-06"),
+            ],
+            category="Area Rug",
+            colors=["Beige"],
+            sizes=["9' x 12'"],
+            title_format="split",
+        ))
+        self.assertTrue(result.candidates)
+        self.assertTrue(all("Area Rug" in item.main_title for item in result.candidates))
+        self.assertTrue(all("Runner" not in item.main_title for item in result.candidates))
+        self.assertNotIn("bathroom rugs", [item.term for item in result.traffic_keywords])
+        self.assertNotIn("runner rug", [item.term for item in result.traffic_keywords])
+        self.assertIn("Living Room", result.size_scenarios[0].primary_scenes)
+
 
 if __name__ == "__main__":
     unittest.main()

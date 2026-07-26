@@ -223,6 +223,7 @@ class KeywordEntry(BaseModel):
     term: str
     volume: float | None = None
     month: str | None = None
+    rank: int | None = None
 
 
 class TitleGenerateRequest(BaseModel):
@@ -255,7 +256,36 @@ class TitleCandidate(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class TitleKeywordAnalysis(BaseModel):
+    term: str
+    volume: float | None = None
+    month: str | None = None
+    rank: int | None = None
+    relevance: int = 0
+    role: str
+    reason: str
+
+
+class SizeScenarioAnalysis(BaseModel):
+    size: str | None = None
+    product_type: str
+    primary_scenes: list[str] = Field(default_factory=list)
+    secondary_scenes: list[str] = Field(default_factory=list)
+    reasoning: str
+
+
+class CompetitorTitleAnalysis(BaseModel):
+    sample_size: int = 0
+    common_openings: list[str] = Field(default_factory=list)
+    common_features: list[str] = Field(default_factory=list)
+    recommended_structure: str
+    consumer_note: str
+
+
 class TitleGenerateResult(BaseModel):
     candidates: list[TitleCandidate]
     traffic_keywords: list[KeywordEntry] = Field(default_factory=list)
+    keyword_analysis: list[TitleKeywordAnalysis] = Field(default_factory=list)
+    size_scenarios: list[SizeScenarioAnalysis] = Field(default_factory=list)
+    competitor_analysis: CompetitorTitleAnalysis
     rules: list[str] = Field(default_factory=list)

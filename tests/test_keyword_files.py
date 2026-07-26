@@ -39,6 +39,23 @@ class KeywordFileTests(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertTrue(result.warnings)
 
+    def test_uses_latest_month_instead_of_highest_historical_volume(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["关键词", "月份", "搜索量"])
+        sheet.append(["area rugs", "2026-05", 50000])
+        sheet.append(["area rugs", "2026-06", 42000])
+        sheet.append(["washable area rugs", "2026-06", 43000])
+        output = io.BytesIO()
+        workbook.save(output)
+
+        result = inspect_keyword_file("monthly.xlsx", output.getvalue())
+
+        by_term = {item.term: item for item in result.keywords}
+        self.assertEqual(by_term["area rugs"].volume, 42000)
+        self.assertEqual(by_term["area rugs"].month, "2026-06")
+        self.assertEqual(by_term["washable area rugs"].rank, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

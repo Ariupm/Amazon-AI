@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "title-generation-v7";
+const REQUIRED_BACKEND = "title-research-v8";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
@@ -37,6 +37,18 @@ type GeneratedTitle = {
   highlight_item?: string; full_title: string; main_count: number;
   highlight_count: number; full_count: number; keywords_used: string[];
   warnings: string[];
+};
+type KeywordAnalysis = {
+  term: string; volume?: number; month?: string; rank?: number;
+  relevance: number; role: string; reason: string;
+};
+type SizeScenario = {
+  size?: string; product_type: string; primary_scenes: string[];
+  secondary_scenes: string[]; reasoning: string;
+};
+type CompetitorTitleAnalysis = {
+  sample_size: number; common_openings: string[]; common_features: string[];
+  recommended_structure: string; consumer_note: string;
 };
 
 const uploadGuides = [
@@ -74,7 +86,10 @@ export default function MarketWorkspace() {
   const [researchStarted, setResearchStarted] = useState(false);
   const [nextNotice, setNextNotice] = useState("");
   const [generatedTitles, setGeneratedTitles] = useState<GeneratedTitle[]>([]);
-  const [trafficKeywords, setTrafficKeywords] = useState<{ term: string; volume?: number }[]>([]);
+  const [trafficKeywords, setTrafficKeywords] = useState<{ term: string; volume?: number; month?: string; rank?: number }[]>([]);
+  const [keywordAnalysis, setKeywordAnalysis] = useState<KeywordAnalysis[]>([]);
+  const [sizeScenarios, setSizeScenarios] = useState<SizeScenario[]>([]);
+  const [competitorTitleAnalysis, setCompetitorTitleAnalysis] = useState<CompetitorTitleAnalysis | null>(null);
   const candidatePageSize = 10;
 
   const selected = useMemo(() => candidates.filter(item => item.selected), [candidates]);
@@ -102,6 +117,9 @@ export default function MarketWorkspace() {
     setNextNotice("");
     setGeneratedTitles([]);
     setTrafficKeywords([]);
+    setKeywordAnalysis([]);
+    setSizeScenarios([]);
+    setCompetitorTitleAnalysis(null);
   }
 
   async function ensureCurrentBackend() {
@@ -335,6 +353,9 @@ export default function MarketWorkspace() {
       if (!response.ok) throw new Error(result.detail || "标题生成失败");
       setGeneratedTitles(result.candidates || []);
       setTrafficKeywords(result.traffic_keywords || []);
+      setKeywordAnalysis(result.keyword_analysis || []);
+      setSizeScenarios(result.size_scenarios || []);
+      setCompetitorTitleAnalysis(result.competitor_analysis || null);
       setMessage(`已生成 ${result.candidates?.length || 0} 个真实标题候选，请逐条编辑和人工确认。`);
       setTimeout(() => document.getElementById("generated-titles")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (error) {
@@ -419,7 +440,19 @@ export default function MarketWorkspace() {
           <div className="panelHead"><div><h3>5. 真实标题研究</h3><p>本轮研究输入已锁定；点击生成后才会产生标题，结果仍需人工编辑和确认。</p></div><span className="selectedCount">{generatedTitles.length ? `已生成 ${generatedTitles.length} 个` : "等待生成"}</span></div>
           <div className="researchInputs"><div><span>本品</span><b>{product?.asin}</b><small>{product?.title}</small></div><div><span>竞品</span><b>{selected.length} 个已锁定</b><small>同品牌同尺寸已归并</small></div><div><span>ABA 词库</span><b>{abaSummary?.rows || 0} 个关键词</b><small>{abaSummary?.volume_columns.length ? `已识别 ${abaSummary.volume_columns.length} 个搜索量字段` : "未识别搜索量字段"}</small></div><div><span>标题任务</span><b>{taskMode === "new-variant" ? `${titleCount} 个新增变体组合` : "优化当前子体"}</b><small>{titleFormat === "split" ? "二段标题制式" : "原标题制式"}</small></div></div>
           <div className="generateAction"><div><b>还没有生成标题</b><span>系统将优先放置类目大词，只采用本品真实卖点，并按 ABA 相关性和搜索量辅助选词。</span></div><button onClick={generateTitleCandidates} disabled={loading === "titles"}>{loading === "titles" ? "正在生成…" : generatedTitles.length ? "重新生成标题候选" : "生成标题候选"}</button></div>
-          {!!trafficKeywords.length && <div className="trafficKeywordBar"><b>本轮采用的流量词</b>{trafficKeywords.slice(0, 10).map(item => <span key={item.term}>{item.term}{item.volume ? ` · ${item.volume.toLocaleString()}` : ""}</span>)}</div>}
+          {!!generatedTitles.length && <section className="titleResearchReport">
+            <div className="researchReportHead"><div><b>生成前分析结果</b><span>先判断消费者、市场结构、尺寸场景与候选词，再生成标题</span></div><em>数据来自本轮真实资料</em></div>
+            {competitorTitleAnalysis && <div className="competitorWritingStudy">
+              <div><span>竞品样本</span><b>{competitorTitleAnalysis.sample_size} 个已锁定标题</b></div>
+              <div><span>竞品高频真实卖点</span><b>{competitorTitleAnalysis.common_features.join(" · ") || "未识别到稳定共性"}</b></div>
+              <div className="wideStudy"><span>建议英文结构</span><b>{competitorTitleAnalysis.recommended_structure}</b><small>{competitorTitleAnalysis.consumer_note}</small></div>
+            </div>}
+            {!!sizeScenarios.length && <div className="scenarioStudy"><h4>不同尺寸的市场场景判断</h4>{sizeScenarios.map(item => <article key={item.size || item.product_type}><div><b>{item.size || "当前尺寸"}</b><span>{item.product_type}</span></div><p>主场景：{item.primary_scenes.join(" / ")}</p><p>辅助场景：{item.secondary_scenes.join(" / ")}</p><small>{item.reasoning}</small></article>)}</div>}
+            <div className="keywordStudy"><div className="keywordStudyHead"><div><h4>最新候选词与排名</h4><p>排名＝上传ABA词库最新月份的搜索量排名，不是 Amazon 自然位；只保留与本品、尺寸和场景一致的词。</p></div><span>{keywordAnalysis[0]?.month ? `最新字段：${keywordAnalysis[0].month}` : "词库未提供月份字段"}</span></div>
+              <div className="keywordTable"><div className="keywordRow keywordHeader"><span>词库排名</span><span>候选关键词</span><span>最新搜索量</span><span>相关度</span><span>建议位置</span><span>判断</span></div>{keywordAnalysis.map(item => <div className="keywordRow" key={item.term}><span>{item.rank ? `#${item.rank}` : "—"}</span><b>{item.term}</b><span>{item.volume?.toLocaleString() || "—"}</span><span>{item.relevance}分</span><em>{item.role}</em><small>{item.reason}</small></div>)}</div>
+            </div>
+          </section>}
+          {!!trafficKeywords.length && <div className="trafficKeywordBar"><b>通过校验的候选词</b>{trafficKeywords.slice(0, 10).map(item => <span key={item.term}>{item.rank ? `#${item.rank} · ` : ""}{item.term}{item.volume ? ` · ${item.volume.toLocaleString()}` : ""}</span>)}</div>}
           {!!generatedTitles.length && <div className="generatedTitles" id="generated-titles">{generatedTitles.map((item, index) => {
             const mainLimit = titleFormat === "split" ? 75 : 200;
             return <article className="generatedTitleCard" key={item.id}>
