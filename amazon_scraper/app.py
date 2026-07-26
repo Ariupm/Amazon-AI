@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,9 +14,28 @@ from .excel_export import build_products_xlsx
 from .scraper import BrowserSession, ScrapeError, scrape_product
 
 app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://caishu-amazon-insights.chumoiii.chatgpt.site",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 static = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static), name="static")
 lock = asyncio.Lock()
+
+
+@app.middleware("http")
+async def private_network_access(request, call_next):
+    response = await call_next(request)
+    if request.headers.get("access-control-request-private-network") == "true":
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
 
 
 @app.get("/")

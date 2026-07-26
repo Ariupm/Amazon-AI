@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+export { default } from "./collector";
 
 type Stage = "idle" | "running" | "done";
 
@@ -17,7 +18,7 @@ const steps = [
   ["分析评论洞察", "聚合近期高相关评论"],
 ];
 
-export default function Home() {
+function LegacyHome() {
   const [asin, setAsin] = useState("B0D9W0XH2M");
   const [market, setMarket] = useState("美国站");
   const [stage, setStage] = useState<Stage>("idle");
