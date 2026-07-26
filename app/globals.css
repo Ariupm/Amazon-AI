@@ -197,6 +197,9 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 .researchInputs span,.researchInputs small{font-size:10px;color:#71807b}
 .researchInputs b{font-size:13px;color:#173d33}
 .researchInputs small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nextPhase small{display:block;font-size:9px;color:#ffd88a;margin-top:7px}
+.nextPhase button{cursor:pointer}
+.nextPhase.hasBlockers button{background:#d69a2d;color:#17201f}
 @media(max-width:850px){.discoverActions,.candidateToolbar{align-items:stretch;flex-direction:column}.discoverActions label{width:100%}.discoverActions select{width:100%}}
 @media(max-width:850px){.researchInputs{grid-template-columns:1fr 1fr}}
 @media(max-width:520px){.researchInputs{grid-template-columns:1fr}}

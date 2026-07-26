@@ -83,6 +83,10 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /scrollIntoView/);
   assert.match(workspace, /ABA 综合词库尚未通过读取校验/);
   assert.match(workspace, /api\/keywords\/inspect/);
+  assert.match(workspace, /新增颜色或新增尺寸至少填写一项/);
+  assert.match(workspace, /查看待完成项/);
+  assert.match(workspace, /focusSelector/);
+  assert.doesNotMatch(workspace, /disabled=\{!!nextBlockers\.length\}/);
   assert.doesNotMatch(html, /BAGSMART|LOVEVOOK|61\.2K|综合质量/);
 });
 
