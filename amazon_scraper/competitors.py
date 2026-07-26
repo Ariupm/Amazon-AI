@@ -11,7 +11,10 @@ from PIL import Image, ImageChops, ImageFilter, ImageStat
 from playwright.async_api import BrowserContext
 
 from .models import CompetitorCandidate, CompetitorDiscoverResult
-from .scraper import MARKETPLACES, _challenge, _number, _rating, _snapshot, _text
+from .scraper import (
+    MARKETPLACES, _challenge, _extract_variants, _number, _parent_asin,
+    _rating, _snapshot, _text,
+)
 
 STOPWORDS = {
     "a", "an", "and", "for", "from", "in", "of", "on", "the", "to", "with",
@@ -36,6 +39,25 @@ ATTRIBUTE_GROUPS = {
     "材质": {"polyester", "cotton", "wool", "jute", "nylon", "microfiber"},
     "风格": {"modern", "abstract", "boho", "vintage", "geometric", "minimalist"},
 }
+FEATURE_PHRASES = [
+    # Construction / texture: usually more discriminating than room names.
+    ("high low pile", "High Low Pile", 10), ("high-low pile", "High Low Pile", 10),
+    ("cut and loop", "Cut and Loop", 10), ("raised pattern", "Raised Pattern", 10),
+    ("3d", "3D Texture", 9), ("5d", "5D Texture", 9), ("tufted", "Tufted", 8),
+    ("textured", "Textured", 7), ("shaggy", "Shaggy", 9), ("fluffy", "Fluffy", 8),
+    ("faux wool", "Faux Wool", 9), ("low pile", "Low Pile", 7),
+    # Visual motifs / style.
+    ("arch pattern", "Arch Pattern", 10), ("wave pattern", "Wave Pattern", 10),
+    ("wavy", "Wavy Pattern", 9), ("geometric", "Geometric", 8),
+    ("abstract", "Abstract", 8), ("moroccan", "Moroccan", 9),
+    ("boho", "Boho", 8), ("vintage", "Vintage", 8), ("minimalist", "Minimalist", 7),
+    ("solid color", "Solid Color", 8),
+    # Functional and material attributes.
+    ("machine washable", "Machine Washable", 8), ("washable", "Washable", 6),
+    ("non slip", "Non Slip", 7), ("non-slip", "Non Slip", 7),
+    ("stain resistant", "Stain Resistant", 6), ("polyester", "Polyester", 5),
+    ("soft", "Soft", 4), ("pet friendly", "Pet Friendly", 4),
+]
 
 
 def _tokens(value: str) -> list[str]:
@@ -62,18 +84,45 @@ def _unique_words(*values: str | None, limit: int = 7) -> str:
     return " ".join(words[:limit])
 
 
-def _queries(title: str, category: str | None, material: str | None, style: str | None,
-             use_case: str | None, features: list[str]) -> list[str]:
+def _feature_profile(value: str) -> list[str]:
+    normalized = value.lower().replace("-", " ")
+    matches: dict[str, int] = {}
+    for phrase, label, weight in FEATURE_PHRASES:
+        if phrase.replace("-", " ") in normalized:
+            matches[label] = max(matches.get(label, 0), weight)
+    return [label for label, _ in sorted(matches.items(), key=lambda item: (-item[1], item[0]))]
+
+
+def _queries(title: str, evidence: str, category: str | None, material: str | None,
+             style: str | None, use_case: str | None, features: list[str]) -> tuple[list[str], list[str]]:
     family_name, family_words = _family(f"{category or ''} {title}")
-    category_seed = _unique_words(category, " ".join(sorted(family_words)[:2])) if family_name else _unique_words(category, title, limit=3)
-    feature_text = " ".join(features)
+    # Prefer a reader-facing category supplied by the user. Otherwise use the
+    # family noun identified on the real page.
+    category_seed = _unique_words(category, " ".join(sorted(family_words)[:2]), limit=3) if family_name else _unique_words(category, title, limit=3)
+    detected = _feature_profile(" ".join([title, evidence, material or "", style or "", *features]))
+    explicit = [value.strip() for value in [material, style, *features] if value and value.strip()]
+    profile = list(dict.fromkeys([*detected, *explicit]))
+    construction = [item for item in profile if item in {
+        "High Low Pile", "Cut and Loop", "Raised Pattern", "3D Texture", "5D Texture",
+        "Tufted", "Textured", "Shaggy", "Fluffy", "Faux Wool", "Low Pile", "Polyester",
+    }]
+    visual = [item for item in profile if item in {
+        "Arch Pattern", "Wave Pattern", "Wavy Pattern", "Geometric", "Abstract",
+        "Moroccan", "Boho", "Vintage", "Minimalist", "Solid Color",
+    }]
+    function = [item for item in profile if item not in set(construction + visual)]
     queries = [
-        _unique_words(category_seed, feature_text, limit=7),
-        _unique_words(category_seed, material, style, limit=7),
-        _unique_words(category_seed, use_case, feature_text, limit=7),
-        _unique_words(title, limit=8),
+        _unique_words(category_seed, " ".join(construction[:2]), " ".join(visual[:1]), limit=7),
+        _unique_words(category_seed, " ".join(visual[:2]), " ".join(construction[:1]), limit=7),
+        _unique_words(category_seed, " ".join(function[:2]), " ".join(construction[:1]), limit=7),
+        _unique_words(category_seed, material, style, detected[0] if detected else None, limit=7),
     ]
-    return [query for query in dict.fromkeys(queries) if query]
+    result = [query for query in dict.fromkeys(queries) if query and len(query.split()) >= 2]
+    # If the real page exposes few useful attributes, preserve one focused
+    # title-derived fallback instead of a long, noisy title query.
+    if len(result) < 2:
+        result.append(_unique_words(category_seed, title, limit=6))
+    return list(dict.fromkeys(result)), profile[:10]
 
 
 async def _visual_fingerprint(client: httpx.AsyncClient, url: str | None) -> list[float] | None:
@@ -141,6 +190,8 @@ async def discover_competitors(
     context: BrowserContext, asin: str, marketplace: str, limit: int, headless: bool,
     category: str | None = None, material: str | None = None, style: str | None = None,
     use_case: str | None = None, features: list[str] | None = None,
+    custom_queries: list[str] | None = None,
+    confirmed_brand: str | None = None,
 ) -> CompetitorDiscoverResult:
     features = features or []
     base_url, _ = MARKETPLACES[marketplace]
@@ -148,10 +199,42 @@ async def discover_competitors(
     await page.goto(f"{base_url}/dp/{asin.upper()}", wait_until="domcontentloaded", timeout=60_000)
     await _challenge(page, headless, "本品页面")
     target = await _snapshot(page, base_url, asin.upper())
-    search_queries = _queries(target["title"], category, material, style, use_case, features)
+    # Build the product profile from the real title + bullets + confirmed facts,
+    # not from the title alone.
+    evidence = " ".join(target.get("bullets") or [])
+    generated_queries, target_features = _queries(
+        target["title"], evidence, category, material, style, use_case, features,
+    )
+    custom_queries = [
+        re.sub(r"\s+", " ", query).strip() for query in (custom_queries or [])
+        if 2 <= len(re.sub(r"\s+", " ", query).strip()) <= 120
+    ]
+    search_queries = list(dict.fromkeys(custom_queries))[:6] or generated_queries
     family_name, family_words = _family(f"{category or ''} {target['title']}")
+    # Exclude the complete target family. Otherwise Amazon search often returns
+    # another color/size of the user's own product and it looks like a competitor.
+    own_asins = {asin.upper(), target["asin"]}
+    parent_asin = await _parent_asin(page)
+    if parent_asin:
+        own_asins.add(parent_asin)
+    for variant in await _extract_variants(page, base_url):
+        own_asins.add(variant.asin)
+    brand_text = await _text(page, ["#bylineInfo"])
+    target_brand = re.sub(
+        r"^(Visit the |Brand:\s*)| Store$", "",
+        confirmed_brand or brand_text or "", flags=re.I,
+    ).strip()
+    target_brand_token = (_tokens(target_brand) or [None])[0]
+    if not target_brand_token:
+        first_title_token = (_tokens(target["title"]) or [None])[0]
+        category_vocabulary = set().union(*CATEGORY_FAMILIES.values())
+        # Amazon occasionally omits the byline on parent pages. A distinctive
+        # leading title token is the brand in normal listing title structure.
+        if first_title_token and first_title_token not in category_vocabulary:
+            target_brand_token = first_title_token
 
     raw_by_asin: dict[str, dict] = {}
+    excluded_same_brand = 0
     for query in search_queries:
         await page.goto(f"{base_url}/s?k={quote_plus(query)}", wait_until="domcontentloaded", timeout=60_000)
         await _challenge(page, headless, "竞品搜索页面")
@@ -160,10 +243,16 @@ async def discover_competitors(
         for index in range(min(await cards.count(), max(12, limit))):
             card = cards.nth(index)
             candidate_asin = (await card.get_attribute("data-asin") or "").upper()
-            if not re.fullmatch(r"[A-Z0-9]{10}", candidate_asin) or candidate_asin == asin.upper():
+            if not re.fullmatch(r"[A-Z0-9]{10}", candidate_asin) or candidate_asin in own_asins:
                 continue
             title = await _text(card, ["h2 span", "h2 a span"])  # type: ignore[arg-type]
             if not title:
+                continue
+            # Another listing from the user's own brand is not a competitor,
+            # even when it belongs to a different parent family.
+            title_tokens = _tokens(title)
+            if target_brand_token and title_tokens and title_tokens[0] == target_brand_token:
+                excluded_same_brand += 1
                 continue
             image_node = card.locator("img.s-image").first
             image = await image_node.get_attribute("src") if await image_node.count() else None
@@ -179,7 +268,10 @@ async def discover_competitors(
             })
             item["queries"].append(query)
 
-    target_text = " ".join([target["title"], category or "", material or "", style or "", use_case or "", *features])
+    target_text = " ".join([
+        target["title"], evidence, category or "", material or "", style or "",
+        use_case or "", *features, *target_features,
+    ])
     target_tokens, target_attrs = set(_tokens(target_text)), _phrases(target_text)
     eligible = []
     for item in raw_by_asin.values():
@@ -230,5 +322,7 @@ async def discover_competitors(
         target_asin=asin.upper(), target_title=target["title"], target_image=target["image"],
         search_query=search_queries[0], search_queries=search_queries,
         category_rule=f"同一细分类目：{family_name}" if family_name else "未识别到稳定类目，需人工确认",
+        target_features=target_features, excluded_own_asins=len(own_asins),
+        excluded_same_brand=excluded_same_brand,
         candidates=candidates,
     )

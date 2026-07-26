@@ -125,7 +125,9 @@ class CompetitorDiscoverRequest(BaseModel):
     material: str | None = None
     style: str | None = None
     use_case: str | None = None
+    brand: str | None = None
     features: list[str] = Field(default_factory=list)
+    search_queries: list[str] = Field(default_factory=list, max_length=6)
 
 
 class CompetitorCandidate(BaseModel):
@@ -155,4 +157,7 @@ class CompetitorDiscoverResult(BaseModel):
     search_query: str
     search_queries: list[str] = Field(default_factory=list)
     category_rule: str | None = None
+    target_features: list[str] = Field(default_factory=list)
+    excluded_own_asins: int = 0
+    excluded_same_brand: int = 0
     candidates: list[CompetitorCandidate] = Field(default_factory=list)

@@ -151,3 +151,11 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 .competitorRules b{color:#11372e;margin-right:3px}
 .competitorRules span{background:#fff;border:1px solid #dce5e1;border-radius:999px;padding:4px 8px;font-size:11px}
 .competitorRules small{margin-left:auto;color:#70817c}
+.discoveryProfile{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px;border:1px solid #d9e5df;border-radius:12px;background:#fff}
+.discoveryProfile>div,.discoveryProfile>label{display:flex;flex-wrap:wrap;align-content:flex-start;gap:6px}
+.discoveryProfile b{width:100%;font-size:12px;color:#173d33}
+.discoveryProfile p{margin:0;color:#536760;font-size:13px;line-height:1.6}
+.discoveryProfile code{font:11px/1.4 inherit;background:#edf5f1;color:#146650;border-radius:6px;padding:5px 7px}
+.discoveryProfile textarea{width:100%;min-height:96px;resize:vertical;border:1px solid #d6e1dc;border-radius:8px;padding:8px;font:12px/1.55 inherit;color:#175d4b;background:#f7fbf9}
+.discoveryProfile>small{grid-column:1/-1;color:#7a8883}
+@media(max-width:850px){.discoveryProfile{grid-template-columns:1fr}}

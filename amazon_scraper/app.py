@@ -118,7 +118,7 @@ async def competitor_discovery(request: CompetitorDiscoverRequest) -> Competitor
                     session.context, request.asin, request.marketplace,
                     request.limit, request.headless, request.category,
                     request.material, request.style, request.use_case,
-                    request.features,
+                    request.features, request.search_queries, request.brand,
                 )
             except ScrapeError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
