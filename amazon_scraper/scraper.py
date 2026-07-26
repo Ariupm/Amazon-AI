@@ -630,9 +630,12 @@ async def _scrape_in_context(
         for item in child_snapshots
     ]
     root = child_snapshots[0] if child_snapshots else initial
-    suspected_asin, suspected_confidence, suspected_reason = _rank_suspected_main(
-        variants, initial["asin"]
-    )
+    if is_parent_request:
+        suspected_asin, suspected_confidence, suspected_reason = _rank_suspected_main(
+            variants, initial["asin"]
+        )
+    else:
+        suspected_asin, suspected_confidence, suspected_reason = None, None, None
     reviews = await _collect_reviews(context, base_url, root["asin"], max_review_pages, headless)
     if not reviews:
         warnings.append("登录后仍未读取到评论；该商品可能暂无可访问评论，或 Amazon 当前限制了评论页。")

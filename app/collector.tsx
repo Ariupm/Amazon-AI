@@ -8,7 +8,7 @@ const MAX_ASINS = 100;
 type Variant = {
   asin: string; url: string; title?: string; image?: string; color?: string; size?: string;
   price?: string; list_price?: string; recent_sales_signal?: string; rating?: number;
-  rating_count?: number; data_quality: "complete" | "partial"; is_suspected_main?: boolean;
+  rating_count?: number; bullets?: string[]; data_quality: "complete" | "partial"; is_suspected_main?: boolean;
 };
 type Insight = { phrase: string; mentions: number; evidence: string[] };
 type Product = {
@@ -86,7 +86,7 @@ export default function Collector() {
     <section className="collectorHero" id="workspace">
       <div><span className="eyebrow"><i /> AMAZON REAL DATA</span><h1>真实商品数据采集器</h1><p>调用你电脑上的 Chrome 实际访问 Amazon。支持父子体识别、批量采集、主推判断、评论优痛点和图片版 XLSX。</p></div>
       <form className="collectorForm" onSubmit={submit}>
-        <label className="asinArea"><span>商品 ASIN <small>一行一个，最多 100 个</small></span><textarea value={input} onChange={e => setInput(e.target.value)} placeholder={"B0CT1NWL9J\nB0DSFFXYMD"} /><b className={asins.length > MAX_ASINS ? "over" : ""}>{asins.length} / {MAX_ASINS}</b></label>
+        <label className="asinArea"><span>商品 ASIN（最多 100 个）</span><b className={asins.length > MAX_ASINS ? "over" : ""}>{asins.length} / {MAX_ASINS} 个 ASIN</b><textarea value={input} onChange={e => setInput(e.target.value)} placeholder={"B0CT1NWL9J\nB0DSFFXYMD"} /></label>
         <label><span>站点</span><select value={marketplace} onChange={e => setMarketplace(e.target.value)}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select></label>
         <label><span>评论页数</span><select value={pages} onChange={e => setPages(Number(e.target.value))}><option>0</option><option>1</option><option>2</option><option>3</option><option>5</option></select></label>
         <label><span>变体模式</span><select value={mode} onChange={e => setMode(e.target.value)}><option value="full">完整逐子体</option><option value="fast">极速清单</option></select></label>
@@ -106,10 +106,11 @@ export default function Collector() {
 function ProductResult({ product }: { product: Product }) {
   const main = product.is_parent_request ? product.variants.find(v => v.is_suspected_main) || product.variants.find(v => v.asin === product.suspected_main_asin) : undefined;
   const hero = main || product.variants[0], image = hero?.image || product.images[0], url = hero?.url || product.canonical_url || product.source_url;
+  const bullets = hero?.bullets?.length ? hero.bullets : product.bullets;
   return <section className="liveProduct">
     <div className="taskLabel"><span>{product.is_parent_request ? `父体任务 · ${product.variants.length}/${product.expected_child_count || product.variants.length} 个子体` : "子体任务"}</span><b>{product.requested_asin}</b></div>
     {main && <div className="mainSignal"><b>主推链接：{main.asin}</b><span>{product.suspected_main_reason} · 置信度 {product.suspected_main_confidence === "high" ? "高" : product.suspected_main_confidence === "medium" ? "中" : "低"}</span></div>}
-    <article className="realProductCard"><div className="realImage">{image ? <img src={image} alt="" /> : <span>暂无图片</span>}</div><div className="realInfo"><div className="realSource"><span>{main ? "主推链接" : "真实来源"}</span><a href={url} target="_blank" rel="noreferrer">{hero?.asin || product.asin} ↗</a></div><h2>{hero?.title || product.title}</h2><div className="realFacts"><b>{hero?.price || product.price || "价格未展示"}</b>{(hero?.list_price || product.list_price) && <del>Typical price: {hero?.list_price || product.list_price}</del>}<span>★ {hero?.rating ?? product.rating ?? "—"} · {hero?.rating_count ?? product.rating_count ?? "—"} 条评分</span><span>{hero?.recent_sales_signal || product.recent_sales_signal || "月销量信号未展示"}</span></div>{!hero && <ul>{product.bullets.map(x => <li key={x}>{x}</li>)}</ul>}</div></article>
+    <article className="realProductCard"><div className="realImage">{image ? <img src={image} alt="" /> : <span>暂无图片</span>}</div><div className="realInfo"><div className="realSource"><span>{main ? "主推链接" : "真实来源"}</span><a href={url} target="_blank" rel="noreferrer">{hero?.asin || product.asin} ↗</a></div><h2>{hero?.title || product.title}</h2><div className="realFacts"><b>{hero?.price || product.price || "价格未展示"}</b>{(hero?.list_price || product.list_price) && <del>Typical price: {hero?.list_price || product.list_price}</del>}<span>★ {hero?.rating ?? product.rating ?? "—"} · {hero?.rating_count ?? product.rating_count ?? "—"} 条评分</span><span>{hero?.recent_sales_signal || product.recent_sales_signal || "月销量信号未展示"}</span></div>{bullets.length > 0 && <ul>{bullets.map(x => <li key={x}>{x}</li>)}</ul>}</div></article>
     {product.warnings.length > 0 && <div className="resultWarnings">{product.warnings.map(warning => <span key={warning}>! {warning}</span>)}</div>}
     <div className="liveSectionHead"><div><h2>{product.is_parent_request ? "全部真实子体" : "当前子体信息"}</h2><p>主推子体按月销量信号优先置顶</p></div><b>{product.variants.length} 个</b></div>
     <div className="liveTable"><table><thead><tr><th>图片</th><th>ASIN / 标题</th><th>颜色 / 尺寸</th><th>价格</th><th>月销量信号</th><th>状态</th></tr></thead><tbody>{product.variants.map(variant => <tr className={variant.is_suspected_main ? "mainRow" : ""} key={variant.asin}><td>{variant.image ? <img src={variant.image} alt="" /> : "无图"}</td><td><a href={variant.url} target="_blank" rel="noreferrer"><b>{variant.is_suspected_main && <em>主推</em>} {variant.asin} ↗</b></a><span>{variant.title || "标题未读取"}</span></td><td><b>{variant.color || "颜色未展示"}</b><span>{variant.size || "尺寸未展示"}</span></td><td><b>{variant.price || "未展示"}</b>{variant.list_price && <del>Typical: {variant.list_price}</del>}</td><td>{variant.recent_sales_signal || "未展示"}</td><td><i className={variant.data_quality}>{variant.data_quality === "complete" ? "完整" : "部分"}</i></td></tr>)}</tbody></table></div>
