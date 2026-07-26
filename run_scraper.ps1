@@ -7,11 +7,28 @@ $openApiUrl = "http://127.0.0.1:$port/openapi.json"
 $pageUrl = "http://127.0.0.1:$port"
 $requiredFeatureVersion = "competitor-profile-v4"
 
+function Get-ListenerProcessId {
+    $connection = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($connection) {
+        return [int]$connection.OwningProcess
+    }
+
+    # Get-NetTCPConnection can return nothing for a listener owned by a process
+    # started in another terminal/session. netstat still exposes the PID.
+    $line = netstat -ano |
+        Select-String -Pattern "^\s*TCP\s+127\.0\.0\.1:$port\s+\S+\s+LISTENING\s+(\d+)\s*$" |
+        Select-Object -First 1
+    if ($line -and $line.Matches.Count -gt 0) {
+        return [int]$line.Matches[0].Groups[1].Value
+    }
+    return $null
+}
+
 # Reuse only the exact current server. Merely having the batch API is not
 # sufficient because older competitor-discovery code used the same endpoint.
-$listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-if ($listener) {
+$listenerProcessId = Get-ListenerProcessId
+if ($listenerProcessId) {
     $isCurrentVersion = $false
     try {
         $health = Invoke-RestMethod $healthUrl -TimeoutSec 3
@@ -26,13 +43,13 @@ if ($listener) {
         exit 0
     }
 
-    $oldProcess = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+    $oldProcess = Get-Process -Id $listenerProcessId -ErrorAction SilentlyContinue
     if ($oldProcess -and $oldProcess.ProcessName -match "python|uvicorn") {
         Write-Host "检测到旧版抓取器，正在替换..." -ForegroundColor Yellow
         Stop-Process -Id $oldProcess.Id -Force
         Start-Sleep -Milliseconds 800
     } else {
-        throw "端口 $port 被其他程序占用，无法安全替换。进程 ID：$($listener.OwningProcess)"
+        throw "端口 $port 被其他程序占用，无法安全替换。进程 ID：$listenerProcessId"
     }
 }
 

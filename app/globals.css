@@ -161,6 +161,14 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 @media(max-width:850px){.discoveryProfile{grid-template-columns:1fr}}
 .discoverActions{display:flex;align-items:flex-end;gap:9px}
 .backendVersion{font-style:normal;color:#0b765d;font-weight:700}
+.sourceStatus{display:flex;align-items:flex-start;gap:9px;border-radius:10px;padding:11px 13px;font-size:13px;line-height:1.55}
+.sourceStatus i{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:0 0 auto;background:#d39a18}
+.sourceStatus.notice{background:#fff8e8;color:#8a610a;border:1px solid #edd8a6}
+.sourceStatus.working{background:#eef6ff;color:#285f91;border:1px solid #c9def1}
+.sourceStatus.working i{background:#3183c8;animation:pulse 1s infinite}
+.sourceStatus.success{background:#edf8f2;color:#17684f;border:1px solid #c6e4d5}
+.sourceStatus.success i{background:#15966c}
+@keyframes pulse{50%{opacity:.35}}
 .discoverActions label{display:grid;gap:4px;font-size:11px;color:#6e7c77}
 .discoverActions select{border:1px solid #d3dfd9;border-radius:8px;padding:8px 28px 8px 9px;background:#fff;color:#18372f}
 .candidateToolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 2px;color:#61716c;font-size:13px}

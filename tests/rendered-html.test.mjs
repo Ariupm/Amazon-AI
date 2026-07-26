@@ -73,6 +73,8 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /导出全部 XLSX/);
   assert.match(workspace, /competitor-profile-v4/);
   assert.match(workspace, /旧版本机抓取器仍占用 8765 端口/);
+  assert.match(workspace, /正在检查本机抓取器版本/);
+  assert.match(workspace, /未连接到本机抓取器/);
   assert.match(html, /卖家精灵关键词表/);
   assert.doesNotMatch(html, /BAGSMART|LOVEVOOK|61\.2K|综合质量/);
 });
@@ -87,5 +89,7 @@ test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
   assert.match(launcher, /competitor-profile-v4/);
   assert.match(launcher, /检测到旧版抓取器/);
+  assert.match(launcher, /netstat -ano/);
+  assert.match(launcher, /Get-ListenerProcessId/);
   assert.doesNotMatch(launcher, /if \(\$hasBatchApi\)/);
 });

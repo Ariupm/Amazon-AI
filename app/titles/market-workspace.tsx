@@ -43,6 +43,7 @@ export default function MarketWorkspace() {
   const [manualAsins, setManualAsins] = useState("");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [message, setMessage] = useState("");
+  const [sourceMessage, setSourceMessage] = useState("使用前请先双击项目中的“启动真实抓取器.bat”，再点击读取。");
   const [loading, setLoading] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [newColors, setNewColors] = useState("");
@@ -93,10 +94,15 @@ export default function MarketWorkspace() {
 
   async function readProduct(event: FormEvent) {
     event.preventDefault();
-    if (!/^[A-Z0-9]{10}$/.test(asin)) return setMessage(`请输入有效的 10 位${taskMode === "new-variant" ? "父体" : "子体"} ASIN。`);
-    setLoading("product"); setMessage("正在调用本机 Chrome 读取本品真实资料…");
+    if (!/^[A-Z0-9]{10}$/.test(asin)) {
+      setSourceMessage(`请输入有效的 10 位${taskMode === "new-variant" ? "父体" : "子体"} ASIN。`);
+      return;
+    }
+    setLoading("product");
+    setSourceMessage("正在检查本机抓取器版本…");
     try {
       await ensureCurrentBackend();
+      setSourceMessage("本机抓取器版本正确，正在打开 Chrome 读取 Amazon 真实页面…");
       const response = await fetch(`${API}/api/scrape/batch`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ asins: [asin], marketplace, max_review_pages: 0, headless: false, variant_mode: "fast" }),
@@ -105,9 +111,9 @@ export default function MarketWorkspace() {
       if (!response.ok || !batch.items?.[0]?.success) throw new Error(batch.detail || batch.items?.[0]?.error || "读取失败");
       setProduct(batch.items[0].result);
       resetDiscovery();
-      setMessage(taskMode === "new-variant" ? "父体及现有子体资料已读取。请填写准备新增的颜色和尺寸。" : "该子体资料已读取。请确认商品事实，再发现竞品。");
+      setSourceMessage(taskMode === "new-variant" ? `父体读取完成：已取得 ${batch.items[0].result.variants?.length || 0} 个现有子体，后续竞品搜索会全部排除。` : "该子体资料已读取。请确认商品事实，再发现竞品。");
     } catch (error) {
-      setMessage(error instanceof TypeError ? "请先运行本机“启动真实抓取器.bat”。" : error instanceof Error ? error.message : "读取失败");
+      setSourceMessage(error instanceof TypeError ? "未连接到本机抓取器。请双击当前项目中的“启动真实抓取器.bat”，看到“最新版真实抓取器已启动”后再试。" : error instanceof Error ? error.message : "读取失败");
     } finally { setLoading(""); }
   }
 
@@ -221,6 +227,7 @@ export default function MarketWorkspace() {
             <form className="asinSource" onSubmit={readProduct}><label>{taskMode === "new-variant" ? "父体 ASIN" : "需要修改的子体 ASIN"}</label><div><input value={asin} maxLength={10} onChange={e => {setAsin(e.target.value.toUpperCase().replace(/\s/g, ""));setProduct(null);resetDiscovery();}} placeholder="例如 B0XXXXXXXX" /><select value={marketplace} onChange={e => {setMarketplace(e.target.value);resetDiscovery();}}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select><button disabled={loading === "product"}>{loading === "product" ? "读取中…" : taskMode === "new-variant" ? "读取父体" : "读取子体"}</button></div>{product && <div className="targetMini">{product.images[0] && <img src={product.images[0]} alt="" />}<span><b>{product.title}</b><small>{product.asin} · {product.price || "价格未展示"} · 五点 {product.bullets.length} 条{taskMode === "new-variant" ? ` · 已读取 ${product.variants.length} 个现有子体；这些 ASIN 会全部排除` : ""}</small></span></div>}</form>
             <label className="imageSource"><span>上传产品部资料图</span><input type="file" accept="image/*,.pdf" onChange={uploadImage} />{imagePreview ? <img src={imagePreview} alt="上传预览" /> : <div><b>＋ 选择资料</b><small>产品结构、材质、工艺、洗护与可证明卖点</small></div>}</label>
           </div>
+          <div className={`sourceStatus ${loading === "product" ? "working" : product ? "success" : "notice"}`}><i /> <span>{sourceMessage}</span></div>
           {taskMode === "new-variant" && <div className="variantTitleInputs">
             <div className="variantIntro"><b>新增标题变量</b><span>一行一个；系统按颜色 × 尺寸生成标题。新 ASIN 由商品在 Amazon 创建后产生，此处不需要填写。</span></div>
             <label>新增颜色<textarea value={newColors} onChange={e => setNewColors(e.target.value)} placeholder={"Beige\nDark Green\nBrown"} /></label>
