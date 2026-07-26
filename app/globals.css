@@ -146,6 +146,10 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 @media(max-width:850px){.taskChoices,.titleFormatRow{grid-template-columns:1fr}.variantTitleInputs{grid-template-columns:1fr}.variantIntro{display:grid}.combinationCount{border-left:0;border-top:1px solid #d4dfd9;padding-top:14px}}
 .scoreBreakdown{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0}
 .scoreBreakdown span{background:#edf3f0;border-radius:999px;padding:4px 8px;font-size:11px;color:#31534a}
+.candidateIdentity{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:7px}
+.candidateIdentity b{font-size:10px;color:#173f35}
+.candidateIdentity span{font-size:8px;color:#64746f;border:1px solid #dce6e1;border-radius:999px;padding:3px 6px;background:#fafcfb}
+.visualReason{font-size:9px!important;color:#49675f!important;line-height:1.45!important;margin:-2px 0 7px!important}
 .matchReasons{font-size:11px!important;color:#75827e!important;line-height:1.5!important;margin:4px 0 10px!important}
 .competitorRules{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:12px 14px;border:1px solid #dce8e2;background:#f5faf7;border-radius:12px;color:#436159}
 .competitorRules b{color:#11372e;margin-right:3px}

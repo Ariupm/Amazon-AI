@@ -129,9 +129,10 @@ async def build_products_xlsx(batch: BatchResult) -> BytesIO:
 
 async def build_competitors_xlsx(request: CompetitorExportRequest) -> BytesIO:
     headers = [
-        "图片", "图片 URL", "已选", "本品 ASIN", "竞品 ASIN", "标题", "价格",
-        "评分", "评分数", "月销量信号", "总匹配分", "标题词分", "属性分",
-        "视觉分", "市场分", "匹配依据", "商品链接",
+        "图片", "图片 URL", "已选", "本品 ASIN", "竞品 ASIN", "竞品父体 ASIN",
+        "品牌", "尺寸", "标题", "价格", "评分", "评分数", "月销量信号",
+        "月销量估算", "总匹配分", "标题词分", "属性分", "视觉分", "视觉依据",
+        "市场分", "匹配依据", "商品链接",
     ]
     semaphore = asyncio.Semaphore(8)
     async with httpx.AsyncClient(
@@ -149,9 +150,11 @@ async def build_competitors_xlsx(request: CompetitorExportRequest) -> BytesIO:
     for item in request.items:
         sheet.append([
             "", item.image or "", "是" if item.selected else "否", request.target_asin or "",
-            item.asin, item.title, item.price or "", item.rating, item.rating_count,
-            item.recent_sales_signal or "", item.overall_similarity, item.text_similarity,
-            item.attribute_similarity, item.image_similarity, item.market_similarity,
+            item.asin, item.parent_asin or "", item.brand or "", item.size or "",
+            item.title, item.price or "", item.rating, item.rating_count,
+            item.recent_sales_signal or "", item.monthly_sales_estimate,
+            item.overall_similarity, item.text_similarity, item.attribute_similarity,
+            item.image_similarity, item.visual_reason or "", item.market_similarity,
             "；".join(item.match_reasons), item.url,
         ])
 
@@ -162,13 +165,13 @@ async def build_competitors_xlsx(request: CompetitorExportRequest) -> BytesIO:
         cell.font = Font(color="FFFFFF", bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[1].height = 26
-    sheet.freeze_panes = "F2"
+    sheet.freeze_panes = "I2"
     sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{sheet.max_row}"
 
     image_streams: list[BytesIO] = []
     for row_index, image_stream in enumerate(images, start=2):
         sheet.row_dimensions[row_index].height = 68
-        for column in (2, 17):
+        for column in (2, 22):
             cell = sheet.cell(row_index, column)
             if cell.value:
                 cell.hyperlink = str(cell.value)
@@ -185,7 +188,7 @@ async def build_competitors_xlsx(request: CompetitorExportRequest) -> BytesIO:
             image.height = 82
             sheet.add_image(image, f"A{row_index}")
 
-    widths = [14, 38, 8, 15, 15, 58, 12, 9, 11, 24, 11, 11, 10, 10, 10, 48, 38]
+    widths = [14, 38, 8, 15, 15, 16, 16, 14, 58, 12, 9, 11, 24, 13, 11, 11, 10, 10, 50, 10, 48, 38]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
 

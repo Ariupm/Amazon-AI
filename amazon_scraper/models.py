@@ -136,6 +136,9 @@ class CompetitorDiscoverRequest(BaseModel):
 
 class CompetitorCandidate(BaseModel):
     asin: str
+    parent_asin: str | None = None
+    brand: str | None = None
+    size: str | None = None
     title: str
     url: str
     image: str | None = None
@@ -143,8 +146,11 @@ class CompetitorCandidate(BaseModel):
     rating: float | None = None
     rating_count: int | None = None
     recent_sales_signal: str | None = None
+    monthly_sales_estimate: int | None = None
     text_similarity: int
     image_similarity: int | None = None
+    visual_images_compared: int = 0
+    visual_reason: str | None = None
     attribute_similarity: int = 0
     market_similarity: int = 0
     category_match: bool = False
@@ -164,12 +170,19 @@ class CompetitorDiscoverResult(BaseModel):
     target_features: list[str] = Field(default_factory=list)
     excluded_own_asins: int = 0
     excluded_same_brand: int = 0
+    collapsed_same_parent: int = 0
+    collapsed_same_brand_size: int = 0
+    competitor_parent_count: int = 0
+    competitor_brand_count: int = 0
     candidates: list[CompetitorCandidate] = Field(default_factory=list)
 
 
 class CompetitorExportItem(BaseModel):
     selected: bool = False
     asin: str
+    parent_asin: str | None = None
+    brand: str | None = None
+    size: str | None = None
     title: str
     url: str
     image: str | None = None
@@ -177,10 +190,13 @@ class CompetitorExportItem(BaseModel):
     rating: float | None = None
     rating_count: int | None = None
     recent_sales_signal: str | None = None
+    monthly_sales_estimate: int | None = None
     overall_similarity: int | None = None
     text_similarity: int | None = None
     attribute_similarity: int | None = None
     image_similarity: int | None = None
+    visual_images_compared: int = 0
+    visual_reason: str | None = None
     market_similarity: int | None = None
     match_reasons: list[str] = Field(default_factory=list)
 

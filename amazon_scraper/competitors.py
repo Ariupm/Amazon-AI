@@ -12,8 +12,8 @@ from playwright.async_api import BrowserContext
 
 from .models import CompetitorCandidate, CompetitorDiscoverResult
 from .scraper import (
-    MARKETPLACES, _challenge, _extract_variants, _number, _parent_asin,
-    _rating, _snapshot, _text,
+    MARKETPLACES, _challenge, _extract_variants, _monthly_sales_estimate,
+    _number, _parent_asin, _rating, _snapshot, _text,
 )
 
 STOPWORDS = {
@@ -146,7 +146,9 @@ def _queries(title: str, evidence: str, category: str | None, material: str | No
     return list(dict.fromkeys(result)), profile[:10]
 
 
-async def _visual_fingerprint(client: httpx.AsyncClient, url: str | None) -> list[float] | None:
+async def _visual_fingerprint(
+    client: httpx.AsyncClient, url: str | None,
+) -> dict[str, list[float]] | None:
     if not url:
         return None
     try:
@@ -160,26 +162,81 @@ async def _visual_fingerprint(client: httpx.AsyncClient, url: str | None) -> lis
         box = mask.getbbox()
         if box:
             image = image.crop(box)
-        image = image.resize((20, 20))
+        image = image.resize((24, 24))
         gray = image.convert("L")
         edges = gray.filter(ImageFilter.FIND_EDGES)
         mean = ImageStat.Stat(gray).mean[0]
-        values = [(pixel - mean) / 255 for pixel in gray.getdata()]
+        structure = [(pixel - mean) / 255 for pixel in gray.getdata()]
         edge_mean = ImageStat.Stat(edges).mean[0]
-        values.extend((pixel - edge_mean) / 255 for pixel in edges.getdata())
-        return values
+        edge_values = [(pixel - edge_mean) / 255 for pixel in edges.getdata()]
+        # A small RGB histogram stops two differently coloured products with the
+        # same room layout from receiving an unrealistically high visual score.
+        histogram = []
+        for channel in image.split():
+            raw = channel.histogram()
+            histogram.extend(sum(raw[start:start + 32]) / (24 * 24) for start in range(0, 256, 32))
+        return {"structure": structure, "edges": edge_values, "color": histogram}
     except Exception:
         return None
 
 
-def _cosine(left: list[float] | None, right: list[float] | None) -> int | None:
+def _cosine(left: list[float] | None, right: list[float] | None) -> float | None:
     if not left or not right or len(left) != len(right):
         return None
     dot = sum(a * b for a, b in zip(left, right))
     norm = math.sqrt(sum(a * a for a in left) * sum(b * b for b in right))
     # Do not shift cosine into the 50-100 range. That old mapping made unrelated
     # room scenes look highly similar merely because both contained a rug.
-    return round(max(0, min(1, dot / norm)) * 100) if norm else None
+    return max(0, min(1, dot / norm)) if norm else None
+
+
+def _visual_score(
+    left: dict[str, list[float]] | None,
+    right: dict[str, list[float]] | None,
+) -> int | None:
+    if not left or not right:
+        return None
+    structure = _cosine(left["structure"], right["structure"])
+    edges = _cosine(left["edges"], right["edges"])
+    color = sum(min(a, b) for a, b in zip(left["color"], right["color"])) / 3
+    if structure is None or edges is None:
+        return None
+    return round(max(0, min(1, structure * .55 + edges * .25 + color * .20)) * 100)
+
+
+def _clean_brand(value: str | None) -> str | None:
+    cleaned = re.sub(
+        r"^(Visit the |Brand:\s*)| Store$",
+        "",
+        value or "",
+        flags=re.I,
+    ).strip()
+    return cleaned or None
+
+
+def _title_brand(title: str) -> str | None:
+    # Amazon titles conventionally lead with the brand. This is only a fast
+    # pre-grouping hint; the detail-page byline replaces it afterwards.
+    match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9&'._-]{1,30})\b", title)
+    return match.group(1).strip() if match else None
+
+
+def _title_size(title: str) -> str | None:
+    patterns = [
+        r"\b\d+(?:\.\d+)?\s*(?:feet|foot|ft|')\s*[x×]\s*\d+(?:\.\d+)?\s*(?:feet|foot|ft|inches|inch|in|\"|')?(?=\s|$|[,;|])",
+        r"\b\d+(?:\.\d+)?\s*[x×]\s*\d+(?:\.\d+)?\s*(?:feet|foot|ft|inches|inch|in)?\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, title, re.I)
+        if match:
+            return re.sub(r"\s+", " ", match.group(0)).strip()
+    return None
+
+
+def _normalize_size(value: str | None) -> str:
+    normalized = (value or "").lower().replace("×", "x")
+    normalized = re.sub(r"\b(feet|foot|ft|inches|inch|in)\b", "", normalized)
+    return re.sub(r"[\s'\"-]+", "", normalized)
 
 
 def _phrases(value: str) -> set[str]:
@@ -204,6 +261,42 @@ def _market_score(target_price: float | None, candidate_price: float | None,
         price_score = max(0, round((1 - ratio) * 70))
     evidence = 30 if sales else 15 if rating_count else 0
     return min(100, price_score + evidence)
+
+
+def _dedupe_and_sort_candidates(
+    candidates: list[CompetitorCandidate],
+) -> tuple[list[CompetitorCandidate], int]:
+    representative_by_group: dict[str, CompetitorCandidate] = {}
+    for candidate in candidates:
+        normalized_brand = (candidate.brand or "").strip().lower()
+        normalized_size = _normalize_size(candidate.size)
+        group_key = (
+            f"brand-size:{normalized_brand}:{normalized_size}"
+            if normalized_brand and normalized_size
+            else f"parent:{candidate.parent_asin or candidate.asin}"
+        )
+        current = representative_by_group.get(group_key)
+        candidate_rank = (
+            candidate.monthly_sales_estimate or 0,
+            candidate.overall_similarity,
+            candidate.image_similarity or 0,
+        )
+        current_rank = (
+            current.monthly_sales_estimate or 0,
+            current.overall_similarity,
+            current.image_similarity or 0,
+        ) if current else None
+        if current is None or candidate_rank > current_rank:
+            representative_by_group[group_key] = candidate
+    collapsed = len(candidates) - len(representative_by_group)
+    representatives = list(representative_by_group.values())
+    representatives.sort(key=lambda item: (
+        -(item.monthly_sales_estimate or 0),
+        -item.overall_similarity,
+        -(item.image_similarity or 0),
+        item.asin,
+    ))
+    return representatives, collapsed
 
 
 async def discover_competitors(
@@ -250,10 +343,7 @@ async def discover_competitors(
     for variant in await _extract_variants(page, base_url):
         own_asins.add(variant.asin)
     brand_text = await _text(page, ["#bylineInfo"])
-    target_brand = re.sub(
-        r"^(Visit the |Brand:\s*)| Store$", "",
-        confirmed_brand or brand_text or "", flags=re.I,
-    ).strip()
+    target_brand = _clean_brand(confirmed_brand or brand_text) or ""
     target_brand_token = (_tokens(target_brand) or [None])[0]
     if not target_brand_token:
         first_title_token = (_tokens(target["title"]) or [None])[0]
@@ -298,7 +388,9 @@ async def discover_competitors(
                     "image": image, "price": await _text(card, [".a-price .a-offscreen"]),
                     "rating_text": await _text(card, [".a-icon-alt"]),
                     "rating_count_text": await _text(card, ["[data-csa-c-slot-id='alf-reviews'] span", ".s-underline-text"]),
-                    "sales": sales, "queries": [],
+                    "sales": sales, "queries": [], "images": [image] if image else [],
+                    "parent_asin": None, "brand": _title_brand(title),
+                    "size": _title_size(title),
                 })
                 if query not in item["queries"]:
                     item["queries"].append(query)
@@ -314,16 +406,83 @@ async def discover_competitors(
         candidate_family, _ = _family(item["title"])
         if family_name and candidate_family != family_name:
             continue
+        other_features = set(_feature_profile(item["title"]))
+        feature_coverage = (
+            len(target_feature_set & other_features) / len(target_feature_set)
+            if target_feature_set else 0
+        )
+        token_overlap = len(target_tokens & set(_tokens(item["title"]))) / max(1, len(target_tokens))
+        item["preliminary_score"] = feature_coverage * .75 + token_overlap * .20 + min(len(item["queries"]), 3) / 3 * .05
         eligible.append(item)
-    eligible = eligible[: max(limit * 3, 24)]
+    # Detail-page verification is required to know the real parent family.
+    # Prioritize the strongest search matches and keep the browser workload bounded.
+    eligible.sort(key=lambda item: (-item["preliminary_score"], item["asin"]))
+    pregrouped: dict[str, dict] = {}
+    for item in eligible:
+        brand_key = (item.get("brand") or "").lower()
+        size_key = _normalize_size(item.get("size"))
+        key = f"{brand_key}:{size_key}" if brand_key and size_key else item["asin"]
+        current = pregrouped.get(key)
+        item_rank = (
+            _monthly_sales_estimate(item.get("sales")) or 0,
+            item["preliminary_score"],
+            len(item["queries"]),
+        )
+        current_rank = (
+            _monthly_sales_estimate(current.get("sales")) or 0,
+            current["preliminary_score"],
+            len(current["queries"]),
+        ) if current else None
+        if current is None or item_rank > current_rank:
+            pregrouped[key] = item
+    preliminary_collapsed = len(eligible) - len(pregrouped)
+    eligible = sorted(
+        pregrouped.values(),
+        key=lambda item: (
+            -(_monthly_sales_estimate(item.get("sales")) or 0),
+            -item["preliminary_score"],
+            item["asin"],
+        ),
+    )[: min(max(limit + 6, 12), 60)]
 
+    for item in eligible:
+        try:
+            await page.goto(item["url"], wait_until="domcontentloaded", timeout=60_000)
+            await _challenge(page, headless, "竞品详情页面")
+            detail = await _snapshot(page, base_url, item["asin"])
+            item["parent_asin"] = await _parent_asin(page)
+            item["brand"] = _clean_brand(await _text(page, ["#bylineInfo"])) or item.get("brand")
+            item["size"] = detail.get("size") or item.get("size")
+            for key in ("title", "price", "image"):
+                if detail.get(key):
+                    item[key] = detail[key]
+            if detail.get("images"):
+                item["images"] = detail["images"][:4]
+            if detail.get("rating") is not None:
+                item["rating"] = detail["rating"]
+            if detail.get("rating_count") is not None:
+                item["rating_count"] = detail["rating_count"]
+            if detail.get("recent_sales_signal"):
+                item["sales"] = detail["recent_sales_signal"]
+        except Exception:
+            # Search-card data remains useful when one detail page is blocked.
+            pass
+
+    target_image_urls = list(dict.fromkeys(target.get("images") or [target.get("image")]))[:4]
+    all_image_urls = list(dict.fromkeys([
+        url for item in eligible for url in (item.get("images") or [item.get("image")])[:4] if url
+    ]))
+    download_urls = list(dict.fromkeys([*target_image_urls, *all_image_urls]))
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True) as client:
-        target_fp = await _visual_fingerprint(client, target["image"])
-        fingerprints = await asyncio.gather(*[_visual_fingerprint(client, item["image"]) for item in eligible])
+        downloaded = await asyncio.gather(*[_visual_fingerprint(client, url) for url in download_urls])
+    fingerprint_by_url = dict(zip(download_urls, downloaded))
+    target_fingerprints = [
+        fingerprint_by_url[url] for url in target_image_urls if fingerprint_by_url.get(url)
+    ]
 
     candidates: list[CompetitorCandidate] = []
     target_price = _price(target.get("price"))
-    for item, fingerprint in zip(eligible, fingerprints):
+    for item in eligible:
         other_tokens = set(_tokens(item["title"]))
         union = target_tokens | other_tokens
         token_score = len(target_tokens & other_tokens) / len(union) * 100 if union else 0
@@ -336,8 +495,22 @@ async def discover_competitors(
         other_attrs = _phrases(item["title"])
         attr_union = target_attrs | other_attrs
         attr_score = round(len(target_attrs & other_attrs) / len(attr_union) * 100) if attr_union else text_score
-        image_score = _cosine(target_fp, fingerprint)
-        rating_count = _number(item["rating_count_text"])
+        candidate_image_urls = (item.get("images") or [item.get("image")])[:4]
+        candidate_fingerprints = [
+            fingerprint_by_url[url] for url in candidate_image_urls
+            if url and fingerprint_by_url.get(url)
+        ]
+        pair_scores = sorted(
+            [
+                score for target_fingerprint in target_fingerprints
+                for candidate_fingerprint in candidate_fingerprints
+                if (score := _visual_score(target_fingerprint, candidate_fingerprint)) is not None
+            ],
+            reverse=True,
+        )
+        image_score = round(sum(pair_scores[:2]) / min(2, len(pair_scores))) if pair_scores else None
+        compared_pairs = len(pair_scores)
+        rating_count = item.get("rating_count") or _number(item["rating_count_text"])
         market_score = _market_score(target_price, _price(item["price"]), rating_count, item["sales"])
         overall = round((image_score or 0) * .20 + attr_score * .35 + text_score * .30 + market_score * .15)
         reasons = []
@@ -347,24 +520,50 @@ async def discover_competitors(
         if shared_attrs:
             reasons.append("共同属性：" + "、".join(shared_attrs))
         if image_score is not None:
-            reasons.append(f"去白底视觉 {image_score}%")
+            reasons.append(f"多图视觉 {image_score}%")
+        if item.get("parent_asin"):
+            reasons.append(f"父体 {item['parent_asin']}")
         reasons.append(f"命中 {len(item['queries'])} 组搜索")
+        sales_estimate = _monthly_sales_estimate(item["sales"])
+        visual_reason = (
+            f"去白底后比较轮廓55%＋纹理边缘25%＋颜色20%；"
+            f"本品{len(target_fingerprints)}张×竞品{len(candidate_fingerprints)}张，取最高两组均值"
+            if image_score is not None else "图片不足，未计算视觉分"
+        )
         candidates.append(CompetitorCandidate(
-            asin=item["asin"], title=item["title"], url=item["url"], image=item["image"],
-            price=item["price"], rating=_rating(item["rating_text"]), rating_count=rating_count,
-            recent_sales_signal=item["sales"], text_similarity=text_score,
-            image_similarity=image_score, attribute_similarity=attr_score,
+            asin=item["asin"], parent_asin=item.get("parent_asin"), brand=item.get("brand"),
+            size=item.get("size"),
+            title=item["title"], url=item["url"], image=item["image"],
+            price=item["price"], rating=item.get("rating") or _rating(item["rating_text"]),
+            rating_count=rating_count, recent_sales_signal=item["sales"],
+            monthly_sales_estimate=sales_estimate, text_similarity=text_score,
+            image_similarity=image_score, visual_images_compared=compared_pairs,
+            visual_reason=visual_reason, attribute_similarity=attr_score,
             market_similarity=market_score, category_match=True,
             auto_selected=overall >= 60, match_reasons=reasons,
             overall_similarity=overall,
         ))
-    candidates.sort(key=lambda item: (-item.overall_similarity, item.asin))
+
+    # One representative per brand + concrete size. This prevents a search page
+    # full of sibling or near-duplicate listings, while still allowing the same
+    # brand to appear for genuinely different sizes. If Amazon does not expose
+    # size, fall back to the verified parent family.
+    candidates, final_collapsed = _dedupe_and_sort_candidates(candidates)
+    collapsed_same_parent = preliminary_collapsed + final_collapsed
+    # Public monthly-sales evidence is the primary ranking signal requested by
+    # the operator. Similarity resolves ties; products without a signal follow.
     candidates = candidates[:limit]
+    parent_count = len({item.parent_asin or item.asin for item in candidates})
+    brand_count = len({item.brand.lower() for item in candidates if item.brand})
     return CompetitorDiscoverResult(
         target_asin=asin.upper(), target_title=target["title"], target_image=target["image"],
         search_query=search_queries[0], search_queries=search_queries,
         category_rule=f"同一细分类目：{family_name}" if family_name else "未识别到稳定类目，需人工确认",
         target_features=target_features, excluded_own_asins=len(own_asins),
         excluded_same_brand=excluded_same_brand,
+        collapsed_same_parent=collapsed_same_parent,
+        collapsed_same_brand_size=collapsed_same_parent,
+        competitor_parent_count=parent_count,
+        competitor_brand_count=brand_count,
         candidates=candidates,
     )

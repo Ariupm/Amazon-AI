@@ -17,8 +17,8 @@ from .competitors import discover_competitors
 from .excel_export import build_competitors_xlsx, build_products_xlsx
 from .scraper import BrowserSession, ScrapeError, scrape_product
 
-FEATURE_VERSION = "competitor-profile-v4"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.4.0")
+FEATURE_VERSION = "competitor-diversity-v5"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.5.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
