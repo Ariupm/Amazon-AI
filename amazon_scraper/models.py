@@ -119,7 +119,8 @@ class BatchResult(BaseModel):
 class CompetitorDiscoverRequest(BaseModel):
     asin: str = Field(pattern=r"^[A-Za-z0-9]{10}$")
     marketplace: Literal["US", "UK", "DE", "JP"] = "US"
-    limit: int = Field(default=12, ge=3, le=24)
+    limit: int = Field(default=24, ge=6, le=60)
+    search_pages: int = Field(default=1, ge=1, le=3)
     headless: bool = False
     category: str | None = None
     material: str | None = None
@@ -128,6 +129,9 @@ class CompetitorDiscoverRequest(BaseModel):
     brand: str | None = None
     features: list[str] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list, max_length=6)
+    exclude_asins: list[str] = Field(default_factory=list, max_length=1000)
+    reference_titles: list[str] = Field(default_factory=list, max_length=100)
+    reference_bullets: list[str] = Field(default_factory=list, max_length=100)
 
 
 class CompetitorCandidate(BaseModel):
@@ -161,3 +165,26 @@ class CompetitorDiscoverResult(BaseModel):
     excluded_own_asins: int = 0
     excluded_same_brand: int = 0
     candidates: list[CompetitorCandidate] = Field(default_factory=list)
+
+
+class CompetitorExportItem(BaseModel):
+    selected: bool = False
+    asin: str
+    title: str
+    url: str
+    image: str | None = None
+    price: str | None = None
+    rating: float | None = None
+    rating_count: int | None = None
+    recent_sales_signal: str | None = None
+    overall_similarity: int | None = None
+    text_similarity: int | None = None
+    attribute_similarity: int | None = None
+    image_similarity: int | None = None
+    market_similarity: int | None = None
+    match_reasons: list[str] = Field(default_factory=list)
+
+
+class CompetitorExportRequest(BaseModel):
+    target_asin: str | None = None
+    items: list[CompetitorExportItem] = Field(min_length=1, max_length=200)

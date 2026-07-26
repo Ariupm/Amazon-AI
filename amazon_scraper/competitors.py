@@ -20,6 +20,7 @@ STOPWORDS = {
     "a", "an", "and", "for", "from", "in", "of", "on", "the", "to", "with",
     "new", "pack", "inch", "inches", "amazon", "black", "white", "beige",
     "brown", "blue", "green", "grey", "gray", "red", "large", "small",
+    "runner", "runners", "feet", "foot", "ft", "inch", "inches",
 }
 CATEGORY_FAMILIES = {
     "rug": {"rug", "rugs", "carpet", "carpets", "runner", "runners"},
@@ -29,6 +30,11 @@ CATEGORY_FAMILIES = {
     "furniture": {"chair", "chairs", "table", "desk", "sofa", "cabinet"},
     "clothing": {"dress", "shirt", "pants", "jacket", "coat", "sweater"},
     "kitchen": {"pan", "pot", "knife", "cookware", "utensil", "container"},
+}
+CATEGORY_QUERY = {
+    "rug": "area rug", "bag": "bag", "bedding": "bedding",
+    "curtain": "curtain", "furniture": "furniture",
+    "clothing": "clothing", "kitchen": "kitchen",
 }
 ATTRIBUTE_GROUPS = {
     "可水洗": {"washable", "machine washable", "easy clean", "easy to clean"},
@@ -47,7 +53,8 @@ FEATURE_PHRASES = [
     ("textured", "Textured", 7), ("shaggy", "Shaggy", 9), ("fluffy", "Fluffy", 8),
     ("faux wool", "Faux Wool", 9), ("low pile", "Low Pile", 7),
     # Visual motifs / style.
-    ("arch pattern", "Arch Pattern", 10), ("wave pattern", "Wave Pattern", 10),
+    ("arch pattern", "Arch Pattern", 11), ("arch", "Arch Pattern", 11),
+    ("arc pattern", "Arch Pattern", 11), ("wave pattern", "Wave Pattern", 10),
     ("wavy", "Wavy Pattern", 9), ("geometric", "Geometric", 8),
     ("abstract", "Abstract", 8), ("moroccan", "Moroccan", 9),
     ("boho", "Boho", 8), ("vintage", "Vintage", 8), ("minimalist", "Minimalist", 7),
@@ -63,7 +70,13 @@ FEATURE_PHRASES = [
 def _tokens(value: str) -> list[str]:
     return [
         token.lower() for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9'+-]*", value)
-        if len(token) > 1 and token.lower() not in STOPWORDS
+        if (
+            len(token) > 1
+            and token.lower() not in STOPWORDS
+            and not re.fullmatch(r"\d+(?:[x×]\d+)+", token.lower())
+            and not re.fullmatch(r"\d+(?:\.\d+)?(?:x|ft|in)", token.lower())
+            and not re.fullmatch(r"\d+", token)
+        )
     ]
 
 
@@ -98,7 +111,7 @@ def _queries(title: str, evidence: str, category: str | None, material: str | No
     family_name, family_words = _family(f"{category or ''} {title}")
     # Prefer a reader-facing category supplied by the user. Otherwise use the
     # family noun identified on the real page.
-    category_seed = _unique_words(category, " ".join(sorted(family_words)[:2]), limit=3) if family_name else _unique_words(category, title, limit=3)
+    category_seed = _unique_words(category, CATEGORY_QUERY.get(family_name or ""), limit=3) if family_name else _unique_words(category, title, limit=3)
     detected = _feature_profile(" ".join([title, evidence, material or "", style or "", *features]))
     explicit = [value.strip() for value in [material, style, *features] if value and value.strip()]
     profile = list(dict.fromkeys([*detected, *explicit]))
@@ -111,11 +124,19 @@ def _queries(title: str, evidence: str, category: str | None, material: str | No
         "Moroccan", "Boho", "Vintage", "Minimalist", "Solid Color",
     }]
     function = [item for item in profile if item not in set(construction + visual)]
+    detected_set = set(detected)
+    priority = [
+        "Arch Pattern", "Wave Pattern", "Wavy Pattern", "Raised Pattern",
+        "High Low Pile", "Textured", "3D Texture", "5D Texture", "Fluffy",
+        "Geometric", "Abstract", "Moroccan", "Cut and Loop", "Tufted",
+        "Machine Washable", "Non Slip", "Polyester",
+    ]
+    signals = [label for label in priority if label in detected_set or label in explicit]
     queries = [
-        _unique_words(category_seed, " ".join(construction[:2]), " ".join(visual[:1]), limit=7),
-        _unique_words(category_seed, " ".join(visual[:2]), " ".join(construction[:1]), limit=7),
-        _unique_words(category_seed, " ".join(function[:2]), " ".join(construction[:1]), limit=7),
-        _unique_words(category_seed, material, style, detected[0] if detected else None, limit=7),
+        _unique_words(category_seed, " ".join(signals[:3]), limit=8),
+        _unique_words(category_seed, " ".join(signals[1:4]), limit=8),
+        _unique_words(category_seed, " ".join(signals[3:6]), limit=8),
+        _unique_words(category_seed, " ".join(signals[-3:]), limit=8),
     ]
     result = [query for query in dict.fromkeys(queries) if query and len(query.split()) >= 2]
     # If the real page exposes few useful attributes, preserve one focused
@@ -144,11 +165,8 @@ async def _visual_fingerprint(client: httpx.AsyncClient, url: str | None) -> lis
         edges = gray.filter(ImageFilter.FIND_EDGES)
         mean = ImageStat.Stat(gray).mean[0]
         values = [(pixel - mean) / 255 for pixel in gray.getdata()]
-        values.extend(pixel / 255 for pixel in edges.getdata())
-        # Compact color histogram adds palette similarity without letting white dominate.
-        for channel in image.split():
-            histogram = channel.histogram()
-            values.extend(sum(histogram[index:index + 32]) / 400 for index in range(0, 256, 32))
+        edge_mean = ImageStat.Stat(edges).mean[0]
+        values.extend((pixel - edge_mean) / 255 for pixel in edges.getdata())
         return values
     except Exception:
         return None
@@ -159,7 +177,9 @@ def _cosine(left: list[float] | None, right: list[float] | None) -> int | None:
         return None
     dot = sum(a * b for a, b in zip(left, right))
     norm = math.sqrt(sum(a * a for a in left) * sum(b * b for b in right))
-    return round(max(0, min(1, (dot / norm + 1) / 2)) * 100) if norm else None
+    # Do not shift cosine into the 50-100 range. That old mapping made unrelated
+    # room scenes look highly similar merely because both contained a rug.
+    return round(max(0, min(1, dot / norm)) * 100) if norm else None
 
 
 def _phrases(value: str) -> set[str]:
@@ -192,6 +212,10 @@ async def discover_competitors(
     use_case: str | None = None, features: list[str] | None = None,
     custom_queries: list[str] | None = None,
     confirmed_brand: str | None = None,
+    search_pages: int = 1,
+    exclude_asins: list[str] | None = None,
+    reference_titles: list[str] | None = None,
+    reference_bullets: list[str] | None = None,
 ) -> CompetitorDiscoverResult:
     features = features or []
     base_url, _ = MARKETPLACES[marketplace]
@@ -201,7 +225,9 @@ async def discover_competitors(
     target = await _snapshot(page, base_url, asin.upper())
     # Build the product profile from the real title + bullets + confirmed facts,
     # not from the title alone.
-    evidence = " ".join(target.get("bullets") or [])
+    family_titles = [value for value in (reference_titles or []) if value]
+    family_bullets = [value for value in (reference_bullets or []) if value]
+    evidence = " ".join([*(target.get("bullets") or []), *family_titles, *family_bullets])
     generated_queries, target_features = _queries(
         target["title"], evidence, category, material, style, use_case, features,
     )
@@ -213,7 +239,11 @@ async def discover_competitors(
     family_name, family_words = _family(f"{category or ''} {target['title']}")
     # Exclude the complete target family. Otherwise Amazon search often returns
     # another color/size of the user's own product and it looks like a competitor.
-    own_asins = {asin.upper(), target["asin"]}
+    own_asins = {
+        value.upper() for value in (exclude_asins or [])
+        if re.fullmatch(r"[A-Za-z0-9]{10}", value)
+    }
+    own_asins.update({asin.upper(), target["asin"]})
     parent_asin = await _parent_asin(page)
     if parent_asin:
         own_asins.add(parent_asin)
@@ -236,43 +266,49 @@ async def discover_competitors(
     raw_by_asin: dict[str, dict] = {}
     excluded_same_brand = 0
     for query in search_queries:
-        await page.goto(f"{base_url}/s?k={quote_plus(query)}", wait_until="domcontentloaded", timeout=60_000)
-        await _challenge(page, headless, "竞品搜索页面")
-        await page.wait_for_timeout(600)
-        cards = page.locator("[data-component-type='s-search-result'][data-asin]")
-        for index in range(min(await cards.count(), max(12, limit))):
-            card = cards.nth(index)
-            candidate_asin = (await card.get_attribute("data-asin") or "").upper()
-            if not re.fullmatch(r"[A-Z0-9]{10}", candidate_asin) or candidate_asin in own_asins:
-                continue
-            title = await _text(card, ["h2 span", "h2 a span"])  # type: ignore[arg-type]
-            if not title:
-                continue
-            # Another listing from the user's own brand is not a competitor,
-            # even when it belongs to a different parent family.
-            title_tokens = _tokens(title)
-            if target_brand_token and title_tokens and title_tokens[0] == target_brand_token:
-                excluded_same_brand += 1
-                continue
-            image_node = card.locator("img.s-image").first
-            image = await image_node.get_attribute("src") if await image_node.count() else None
-            sales = await _text(card, ["[aria-label*='bought in past month']", ".a-row.a-size-base"])  # type: ignore[arg-type]
-            if sales and not re.search(r"bought.*month", sales, re.I):
-                sales = None
-            item = raw_by_asin.setdefault(candidate_asin, {
-                "asin": candidate_asin, "title": title, "url": f"{base_url}/dp/{candidate_asin}",
-                "image": image, "price": await _text(card, [".a-price .a-offscreen"]),
-                "rating_text": await _text(card, [".a-icon-alt"]),
-                "rating_count_text": await _text(card, ["[data-csa-c-slot-id='alf-reviews'] span", ".s-underline-text"]),
-                "sales": sales, "queries": [],
-            })
-            item["queries"].append(query)
+        for search_page in range(1, search_pages + 1):
+            await page.goto(
+                f"{base_url}/s?k={quote_plus(query)}&page={search_page}",
+                wait_until="domcontentloaded", timeout=60_000,
+            )
+            await _challenge(page, headless, "竞品搜索页面")
+            await page.wait_for_timeout(500)
+            cards = page.locator("[data-component-type='s-search-result'][data-asin]")
+            for index in range(await cards.count()):
+                card = cards.nth(index)
+                candidate_asin = (await card.get_attribute("data-asin") or "").upper()
+                if not re.fullmatch(r"[A-Z0-9]{10}", candidate_asin) or candidate_asin in own_asins:
+                    continue
+                title = await _text(card, ["h2 span", "h2 a span"])  # type: ignore[arg-type]
+                if not title:
+                    continue
+                # Another listing from the user's own brand is not a competitor,
+                # even when it belongs to a different parent family.
+                title_tokens = _tokens(title)
+                if target_brand_token and title_tokens and title_tokens[0] == target_brand_token:
+                    excluded_same_brand += 1
+                    continue
+                image_node = card.locator("img.s-image").first
+                image = await image_node.get_attribute("src") if await image_node.count() else None
+                sales = await _text(card, ["[aria-label*='bought in past month']", ".a-row.a-size-base"])  # type: ignore[arg-type]
+                if sales and not re.search(r"bought.*month", sales, re.I):
+                    sales = None
+                item = raw_by_asin.setdefault(candidate_asin, {
+                    "asin": candidate_asin, "title": title, "url": f"{base_url}/dp/{candidate_asin}",
+                    "image": image, "price": await _text(card, [".a-price .a-offscreen"]),
+                    "rating_text": await _text(card, [".a-icon-alt"]),
+                    "rating_count_text": await _text(card, ["[data-csa-c-slot-id='alf-reviews'] span", ".s-underline-text"]),
+                    "sales": sales, "queries": [],
+                })
+                if query not in item["queries"]:
+                    item["queries"].append(query)
 
     target_text = " ".join([
         target["title"], evidence, category or "", material or "", style or "",
         use_case or "", *features, *target_features,
     ])
     target_tokens, target_attrs = set(_tokens(target_text)), _phrases(target_text)
+    target_feature_set = set(target_features)
     eligible = []
     for item in raw_by_asin.values():
         candidate_family, _ = _family(item["title"])
@@ -290,14 +326,20 @@ async def discover_competitors(
     for item, fingerprint in zip(eligible, fingerprints):
         other_tokens = set(_tokens(item["title"]))
         union = target_tokens | other_tokens
-        text_score = round(len(target_tokens & other_tokens) / len(union) * 100) if union else 0
+        token_score = len(target_tokens & other_tokens) / len(union) * 100 if union else 0
+        other_feature_set = set(_feature_profile(item["title"]))
+        feature_coverage = (
+            len(target_feature_set & other_feature_set) / len(target_feature_set) * 100
+            if target_feature_set else 0
+        )
+        text_score = round(feature_coverage * .75 + token_score * .25)
         other_attrs = _phrases(item["title"])
         attr_union = target_attrs | other_attrs
         attr_score = round(len(target_attrs & other_attrs) / len(attr_union) * 100) if attr_union else text_score
         image_score = _cosine(target_fp, fingerprint)
         rating_count = _number(item["rating_count_text"])
         market_score = _market_score(target_price, _price(item["price"]), rating_count, item["sales"])
-        overall = round((image_score or 50) * .30 + attr_score * .30 + text_score * .25 + market_score * .15)
+        overall = round((image_score or 0) * .20 + attr_score * .35 + text_score * .30 + market_score * .15)
         reasons = []
         if family_name:
             reasons.append(f"同类目：{family_name}")

@@ -10,7 +10,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image as PILImage
 
-from .models import BatchResult
+from .models import BatchResult, CompetitorExportRequest
 
 
 HEADERS = [
@@ -118,6 +118,74 @@ async def build_products_xlsx(batch: BatchResult) -> BytesIO:
             sheet.add_image(image, f"A{index}")
 
     widths = [14, 42, 15, 15, 11, 15, 54, 18, 16, 14, 16, 12, 24, 14, 10, 12, 22, 12, 38]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+async def build_competitors_xlsx(request: CompetitorExportRequest) -> BytesIO:
+    headers = [
+        "图片", "图片 URL", "已选", "本品 ASIN", "竞品 ASIN", "标题", "价格",
+        "评分", "评分数", "月销量信号", "总匹配分", "标题词分", "属性分",
+        "视觉分", "市场分", "匹配依据", "商品链接",
+    ]
+    semaphore = asyncio.Semaphore(8)
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.amazon.com/"},
+        follow_redirects=True,
+    ) as client:
+        images = await asyncio.gather(*[
+            _download_image(client, item.image, semaphore) for item in request.items
+        ])
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "竞品候选"
+    sheet.append(headers)
+    for item in request.items:
+        sheet.append([
+            "", item.image or "", "是" if item.selected else "否", request.target_asin or "",
+            item.asin, item.title, item.price or "", item.rating, item.rating_count,
+            item.recent_sales_signal or "", item.overall_similarity, item.text_similarity,
+            item.attribute_similarity, item.image_similarity, item.market_similarity,
+            "；".join(item.match_reasons), item.url,
+        ])
+
+    header_fill = PatternFill("solid", fgColor="173F35")
+    selected_fill = PatternFill("solid", fgColor="E8F4EE")
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 26
+    sheet.freeze_panes = "F2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{sheet.max_row}"
+
+    image_streams: list[BytesIO] = []
+    for row_index, image_stream in enumerate(images, start=2):
+        sheet.row_dimensions[row_index].height = 68
+        for column in (2, 17):
+            cell = sheet.cell(row_index, column)
+            if cell.value:
+                cell.hyperlink = str(cell.value)
+                cell.style = "Hyperlink"
+        if sheet.cell(row_index, 3).value == "是":
+            for cell in sheet[row_index]:
+                cell.fill = selected_fill
+        for cell in sheet[row_index]:
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+        if image_stream:
+            image_streams.append(image_stream)
+            image = ExcelImage(image_stream)
+            image.width = 82
+            image.height = 82
+            sheet.add_image(image, f"A{row_index}")
+
+    widths = [14, 38, 8, 15, 15, 58, 12, 9, 11, 24, 11, 11, 10, 10, 10, 48, 38]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
 

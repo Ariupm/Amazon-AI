@@ -17,6 +17,7 @@ type Product = {
   images: string[]; bullets: string[]; variants: {
     asin: string; title?: string; image?: string; price?: string; url: string;
     rating?: number; rating_count?: number; recent_sales_signal?: string;
+    bullets?: string[];
   }[];
 };
 type TaskMode = "optimize" | "new-variant";
@@ -47,14 +48,31 @@ export default function MarketWorkspace() {
   const [newSizes, setNewSizes] = useState("");
   const [customQueries, setCustomQueries] = useState("");
   const [discoveryMeta, setDiscoveryMeta] = useState<{features:string[];queries:string[];excluded:number;sameBrand:number} | null>(null);
+  const [searchPages, setSearchPages] = useState(1);
+  const [resultLimit, setResultLimit] = useState(24);
+  const [candidatePage, setCandidatePage] = useState(1);
+  const candidatePageSize = 10;
 
   const selected = useMemo(() => candidates.filter(item => item.selected), [candidates]);
   const colors = useMemo(() => splitLines(newColors), [newColors]);
   const sizes = useMemo(() => splitLines(newSizes), [newSizes]);
   const titleCount = taskMode === "new-variant" ? Math.max(1, colors.length) * Math.max(1, sizes.length) : 1;
+  const candidatePages = Math.max(1, Math.ceil(candidates.length / candidatePageSize));
+  const visibleCandidates = useMemo(
+    () => candidates.slice((candidatePage - 1) * candidatePageSize, candidatePage * candidatePageSize),
+    [candidates, candidatePage],
+  );
 
   function splitLines(value: string) {
     return [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
+  }
+
+  function resetDiscovery() {
+    setCandidates([]);
+    setCustomQueries("");
+    setDiscoveryMeta(null);
+    setCandidatePage(1);
+    setConfirmed(false);
   }
 
   async function readProduct(event: FormEvent) {
@@ -69,6 +87,7 @@ export default function MarketWorkspace() {
       const batch = await response.json();
       if (!response.ok || !batch.items?.[0]?.success) throw new Error(batch.detail || batch.items?.[0]?.error || "读取失败");
       setProduct(batch.items[0].result);
+      resetDiscovery();
       setMessage(taskMode === "new-variant" ? "父体及现有子体资料已读取。请填写准备新增的颜色和尺寸。" : "该子体资料已读取。请确认商品事实，再发现竞品。");
     } catch (error) {
       setMessage(error instanceof TypeError ? "请先运行本机“启动真实抓取器.bat”。" : error instanceof Error ? error.message : "读取失败");
@@ -82,17 +101,21 @@ export default function MarketWorkspace() {
       const response = await fetch(`${API}/api/competitors/discover`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          asin, marketplace, limit: 12, headless: false,
+          asin, marketplace, limit: resultLimit, search_pages: searchPages, headless: false,
           category: facts.category || null, material: facts.material || null,
           style: facts.style || null, use_case: facts.useCase || null,
           brand: product?.brand || null,
           features: facts.mustHave.split(/[,，\n]+/).map(value => value.trim()).filter(Boolean),
           search_queries: customQueries.split(/\r?\n/).map(value => value.trim()).filter(Boolean),
+          exclude_asins: product ? [product.asin, product.requested_asin, ...product.variants.map(variant => variant.asin)] : [],
+          reference_titles: product ? [product.title, ...product.variants.map(variant => variant.title || "")].filter(Boolean) : [],
+          reference_bullets: product ? [...product.bullets, ...product.variants.flatMap(variant => variant.bullets || [])] : [],
         }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || "竞品发现失败");
       setCandidates(result.candidates.map((item: Candidate) => ({ ...item, selected: item.auto_selected, source: "amazon_search" })));
+      setCandidatePage(1);
       const returnedQueries = result.search_queries || [];
       setDiscoveryMeta({ features: result.target_features || [], queries: returnedQueries, excluded: result.excluded_own_asins || 0, sameBrand: result.excluded_same_brand || 0 });
       setCustomQueries(returnedQueries.join("\n"));
@@ -100,6 +123,28 @@ export default function MarketWorkspace() {
       setMessage(`先识别本品特征，再使用 ${result.search_queries?.length || 1} 组特征词搜索；已排除同父体 ${result.excluded_own_asins || 0} 个 ASIN和 ${result.excluded_same_brand || 0} 个同品牌结果，保留 ${result.candidates.length} 个候选，其中 ${selectedCount} 个达到 60 分门槛。`);
     } catch (error) {
       setMessage(error instanceof TypeError ? "请先运行本机真实抓取器。" : error instanceof Error ? error.message : "竞品发现失败");
+    } finally { setLoading(""); }
+  }
+
+  async function exportCompetitors(mode: "all" | "selected") {
+    const items = mode === "selected" ? selected : candidates;
+    if (!items.length) return setMessage(mode === "selected" ? "请先勾选需要导出的竞品。" : "当前没有可导出的竞品。");
+    setLoading("export");
+    try {
+      const response = await fetch(`${API}/api/competitors/export/xlsx`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_asin: asin, items }),
+      });
+      if (!response.ok) throw new Error("竞品表格生成失败");
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `竞品候选-${asin || "未命名"}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setMessage(`已导出 ${items.length} 个竞品候选，表格第一列包含商品图片。`);
+    } catch (error) {
+      setMessage(error instanceof TypeError ? "请先启动本机真实抓取器。" : error instanceof Error ? error.message : "导出失败");
     } finally { setLoading(""); }
   }
 
@@ -144,10 +189,10 @@ export default function MarketWorkspace() {
         <article className="panel taskPanel">
           <div className="panelHead"><div><h3>1. 选择标题任务</h3><p>两种任务需要的 ASIN 和生成逻辑不同</p></div><span className="requiredMark">必选</span></div>
           <div className="taskChoices">
-            <button className={taskMode === "optimize" ? "selected" : ""} onClick={() => { setTaskMode("optimize"); setProduct(null); }}>
+            <button className={taskMode === "optimize" ? "selected" : ""} onClick={() => { setTaskMode("optimize"); setProduct(null); resetDiscovery(); }}>
               <span>修改</span><b>优化现有商品标题</b><p>输入具体子体 ASIN，仅优化该商品；保留其真实颜色、尺寸和卖点。</p>
             </button>
-            <button className={taskMode === "new-variant" ? "selected" : ""} onClick={() => { setTaskMode("new-variant"); setProduct(null); }}>
+            <button className={taskMode === "new-variant" ? "selected" : ""} onClick={() => { setTaskMode("new-variant"); setProduct(null); resetDiscovery(); }}>
               <span>新增</span><b>编写新增变体标题</b><p>输入父体 ASIN，再填写将新增的颜色与尺寸；这里只写标题，不负责创建变体。</p>
             </button>
           </div>
@@ -155,7 +200,7 @@ export default function MarketWorkspace() {
         <article className="panel sourcePanel">
           <div className="panelHead"><div><h3>2. 获取本品真实资料</h3><p>{taskMode === "new-variant" ? "读取父体和现有子体，提炼同系列可继承的标题骨架与真实卖点" : "读取需要修改标题的具体子体，只使用该商品真实具备的属性"}</p></div><span className="requiredMark">ASIN 必填</span></div>
           <div className="sourceGrid">
-            <form className="asinSource" onSubmit={readProduct}><label>{taskMode === "new-variant" ? "父体 ASIN" : "需要修改的子体 ASIN"}</label><div><input value={asin} maxLength={10} onChange={e => setAsin(e.target.value.toUpperCase().replace(/\s/g, ""))} placeholder="例如 B0XXXXXXXX" /><select value={marketplace} onChange={e => setMarketplace(e.target.value)}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select><button disabled={loading === "product"}>{loading === "product" ? "读取中…" : taskMode === "new-variant" ? "读取父体" : "读取子体"}</button></div>{product && <div className="targetMini">{product.images[0] && <img src={product.images[0]} alt="" />}<span><b>{product.title}</b><small>{product.asin} · {product.price || "价格未展示"} · 五点 {product.bullets.length} 条{taskMode === "new-variant" ? ` · 已读取 ${product.variants.length} 个现有子体` : ""}</small></span></div>}</form>
+            <form className="asinSource" onSubmit={readProduct}><label>{taskMode === "new-variant" ? "父体 ASIN" : "需要修改的子体 ASIN"}</label><div><input value={asin} maxLength={10} onChange={e => {setAsin(e.target.value.toUpperCase().replace(/\s/g, ""));setProduct(null);resetDiscovery();}} placeholder="例如 B0XXXXXXXX" /><select value={marketplace} onChange={e => {setMarketplace(e.target.value);resetDiscovery();}}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select><button disabled={loading === "product"}>{loading === "product" ? "读取中…" : taskMode === "new-variant" ? "读取父体" : "读取子体"}</button></div>{product && <div className="targetMini">{product.images[0] && <img src={product.images[0]} alt="" />}<span><b>{product.title}</b><small>{product.asin} · {product.price || "价格未展示"} · 五点 {product.bullets.length} 条{taskMode === "new-variant" ? ` · 已读取 ${product.variants.length} 个现有子体；这些 ASIN 会全部排除` : ""}</small></span></div>}</form>
             <label className="imageSource"><span>上传产品部资料图</span><input type="file" accept="image/*,.pdf" onChange={uploadImage} />{imagePreview ? <img src={imagePreview} alt="上传预览" /> : <div><b>＋ 选择资料</b><small>产品结构、材质、工艺、洗护与可证明卖点</small></div>}</label>
           </div>
           {taskMode === "new-variant" && <div className="variantTitleInputs">
@@ -168,12 +213,12 @@ export default function MarketWorkspace() {
           <div className="factsGrid"><label>类目大词<input value={facts.category} onChange={e => setFacts({...facts, category:e.target.value})} placeholder="例如 Area Rug" /></label><label>材质<input value={facts.material} onChange={e => setFacts({...facts, material:e.target.value})} placeholder="例如 Polyester" /></label><label>风格 / 外观<input value={facts.style} onChange={e => setFacts({...facts, style:e.target.value})} placeholder="例如 Modern Abstract" /></label><label>主要用途<input value={facts.useCase} onChange={e => setFacts({...facts, useCase:e.target.value})} placeholder="例如 Living Room" /></label><label className="wideFact">必须真实具备的卖点<input value={facts.mustHave} onChange={e => setFacts({...facts, mustHave:e.target.value})} placeholder="用逗号分隔，例如 Washable, Non Slip, Low Pile" /></label></div>
         </article>
         <article className="panel discoverPanel">
-          <div className="panelHead"><div><h3>3. 发现并确认真实竞品</h3><p>系统找疑似候选，人工决定是否纳入研究</p></div><button onClick={discover} disabled={loading === "discover"}>{loading === "discover" ? "正在搜索…" : "自动发现疑似竞品"}</button></div>
-          <div className="competitorRules"><b>筛选规则</b><span>类目不一致直接排除</span><span>视觉 30%</span><span>真实属性 30%</span><span>标题词 25%</span><span>价格与市场信号 15%</span><small>总分达到 60 分才自动勾选，最终仍由人工确认。</small></div>
+          <div className="panelHead"><div><h3>3. 发现并确认真实竞品</h3><p>先识别花型、工艺、纹理和功能；尺寸不进入系统搜索词</p></div><div className="discoverActions"><label>Amazon 翻页<select value={searchPages} onChange={e => setSearchPages(Number(e.target.value))}><option value={1}>1 页</option><option value={2}>2 页</option><option value={3}>3 页</option></select></label><label>最多保留<select value={resultLimit} onChange={e => setResultLimit(Number(e.target.value))}><option value={24}>24 个</option><option value={40}>40 个</option><option value={60}>60 个</option></select></label><button onClick={discover} disabled={loading === "discover" || !product}>{loading === "discover" ? "正在搜索…" : "自动发现疑似竞品"}</button></div></div>
+          <div className="competitorRules"><b>筛选规则</b><span>类目不一致直接排除</span><span>真实属性 35%</span><span>标题特征 30%</span><span>视觉 20%</span><span>价格与市场信号 15%</span><small>视觉分已重新校准，不再因同为室内地毯场景就获得高分。</small></div>
           {discoveryMeta && <div className="discoveryProfile"><div><b>本品特征画像</b><p>{discoveryMeta.features.length ? discoveryMeta.features.join(" · ") : "页面未识别到足够的差异化特征，请补充上方产品事实。"}</p></div><label><b>实际搜索词（可修改后一行一组，再次搜索）</b><textarea value={customQueries} onChange={event => setCustomQueries(event.target.value)} /></label><small>已排除本父体 {discoveryMeta.excluded} 个 ASIN及 {discoveryMeta.sameBrand} 个同品牌搜索结果。修改搜索词后，再点“自动发现疑似竞品”即可重搜。</small></div>}
           <div className="manualCompetitors"><textarea value={manualAsins} onChange={e => setManualAsins(e.target.value)} placeholder={"也可以一行一个批量添加竞品 ASIN\nB0XXXXXXXX\nB0YYYYYYYY"} /><button onClick={addManual} disabled={loading === "manual"}>{loading === "manual" ? "读取中…" : "添加人工竞品"}</button></div>
           {message && <div className="marketMessage">{message}</div>}
-          {candidates.length ? <div className="candidateGrid">{candidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `竞品匹配 ${item.overall_similarity ?? "—"}分`}</span></div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}</p>{item.source !== "manual" && <><div className="scoreBreakdown"><span>标题词 {item.text_similarity ?? "—"}</span><span>属性 {item.attribute_similarity ?? "—"}</span><span>视觉 {item.image_similarity ?? "—"}</span><span>市场 {item.market_similarity ?? "—"}</span></div><p className="matchReasons">{item.match_reasons?.join(" · ") || "等待人工核验"}</p></>}<label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div> : <div className="candidateEmpty"><b>还没有竞品候选</b><span>读取本品后点击“自动发现”，或直接批量添加你已知的竞品 ASIN。</span></div>}
+          {candidates.length ? <><div className="candidateToolbar"><span>共 {candidates.length} 个候选 · 第 {candidatePage}/{candidatePages} 页</span><div><button onClick={() => exportCompetitors("selected")} disabled={loading === "export"}>导出已选 XLSX</button><button onClick={() => exportCompetitors("all")} disabled={loading === "export"}>导出全部 XLSX</button></div></div><div className="candidateGrid">{visibleCandidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `竞品匹配 ${item.overall_similarity ?? "—"}分`}</span></div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}</p>{item.source !== "manual" && <><div className="scoreBreakdown"><span>标题特征 {item.text_similarity ?? "—"}</span><span>属性 {item.attribute_similarity ?? "—"}</span><span>视觉 {item.image_similarity ?? "—"}</span><span>市场 {item.market_similarity ?? "—"}</span></div><p className="matchReasons">{item.match_reasons?.join(" · ") || "等待人工核验"}</p></>}<label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div><div className="candidatePagination"><button disabled={candidatePage <= 1} onClick={() => setCandidatePage(page => page - 1)}>← 上一页</button><span>{candidatePage} / {candidatePages}</span><button disabled={candidatePage >= candidatePages} onClick={() => setCandidatePage(page => page + 1)}>下一页 →</button></div></> : <div className="candidateEmpty"><b>还没有竞品候选</b><span>请先读取父体，再点击“自动发现”；系统会把已读取的全部本品子体排除。</span></div>}
           {candidates.length > 0 && <div className="confirmCompetitors"><span>已选择 <b>{selected.length}</b> 个竞品</span><button onClick={() => {setConfirmed(true);setMessage(`已确认 ${selected.length} 个竞品，可进入关键词资料准备。`)}}>确认竞品并锁定本轮研究</button></div>}
         </article>
         <article className="panel uploadPanel">

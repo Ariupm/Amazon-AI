@@ -11,10 +11,10 @@ from fastapi.staticfiles import StaticFiles
 
 from .models import (
     BatchItemResult, BatchResult, BatchScrapeRequest, CompetitorDiscoverRequest,
-    CompetitorDiscoverResult, ScrapeRequest,
+    CompetitorDiscoverResult, CompetitorExportRequest, ScrapeRequest,
 )
 from .competitors import discover_competitors
-from .excel_export import build_products_xlsx
+from .excel_export import build_competitors_xlsx, build_products_xlsx
 from .scraper import BrowserSession, ScrapeError, scrape_product
 
 app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.0.0")
@@ -119,8 +119,20 @@ async def competitor_discovery(request: CompetitorDiscoverRequest) -> Competitor
                     request.limit, request.headless, request.category,
                     request.material, request.style, request.use_case,
                     request.features, request.search_queries, request.brand,
+                    request.search_pages, request.exclude_asins,
+                    request.reference_titles, request.reference_bullets,
                 )
             except ScrapeError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
             except Exception as error:
                 raise HTTPException(status_code=500, detail=f"竞品发现失败：{error}") from error
+
+
+@app.post("/api/competitors/export/xlsx")
+async def export_competitors_xlsx(request: CompetitorExportRequest) -> StreamingResponse:
+    workbook = await build_competitors_xlsx(request)
+    return StreamingResponse(
+        workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="amazon-competitor-candidates.xlsx"'},
+    )

@@ -159,3 +159,13 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 .discoveryProfile textarea{width:100%;min-height:96px;resize:vertical;border:1px solid #d6e1dc;border-radius:8px;padding:8px;font:12px/1.55 inherit;color:#175d4b;background:#f7fbf9}
 .discoveryProfile>small{grid-column:1/-1;color:#7a8883}
 @media(max-width:850px){.discoveryProfile{grid-template-columns:1fr}}
+.discoverActions{display:flex;align-items:flex-end;gap:9px}
+.discoverActions label{display:grid;gap:4px;font-size:11px;color:#6e7c77}
+.discoverActions select{border:1px solid #d3dfd9;border-radius:8px;padding:8px 28px 8px 9px;background:#fff;color:#18372f}
+.candidateToolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 2px;color:#61716c;font-size:13px}
+.candidateToolbar>div{display:flex;gap:8px}
+.candidateToolbar button,.candidatePagination button{border:1px solid #cfdcd6;background:#fff;color:#0b6e57;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer}
+.candidateToolbar button:disabled,.candidatePagination button:disabled{opacity:.45;cursor:not-allowed}
+.candidatePagination{display:flex;align-items:center;justify-content:center;gap:16px;padding-top:4px}
+.candidatePagination span{font-size:12px;color:#6d7a76}
+@media(max-width:850px){.discoverActions,.candidateToolbar{align-items:stretch;flex-direction:column}.discoverActions label{width:100%}.discoverActions select{width:100%}}
