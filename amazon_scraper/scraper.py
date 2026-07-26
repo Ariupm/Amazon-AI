@@ -57,6 +57,63 @@ def _rating(text: str | None) -> float | None:
     return float(match.group(1).replace(",", ".")) if match else None
 
 
+def _monthly_sales_estimate(signal: str | None) -> int | None:
+    """Normalize signals such as '1K+ bought in past month' for ranking."""
+    if not signal:
+        return None
+    match = re.search(r"([\d,.]+)\s*([KMB万千]?)\s*\+", signal, re.I)
+    if not match:
+        return None
+    number = float(match.group(1).replace(",", ""))
+    unit = match.group(2).upper()
+    multiplier = {
+        "": 1,
+        "K": 1_000,
+        "M": 1_000_000,
+        "B": 1_000_000_000,
+        "千": 1_000,
+        "万": 10_000,
+    }.get(unit, 1)
+    return int(number * multiplier)
+
+
+def _rank_suspected_main(
+    variants: list[Variant],
+    default_asin: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Rank public signals; never claim knowledge of the seller's ad strategy."""
+    if not variants:
+        return None, None, None
+    has_sales_signal = any((variant.monthly_sales_estimate or 0) > 0 for variant in variants)
+    for variant in variants:
+        sales = variant.monthly_sales_estimate or 0
+        promotion = 1 if variant.promotion or variant.discount else 0
+        available = 1 if variant.availability and not re.search(
+            r"out of stock|unavailable|currently unavailable", variant.availability, re.I
+        ) else 0
+        reviews = variant.rating_count or 0
+        is_default = 1 if variant.asin == default_asin else 0
+        if has_sales_signal:
+            variant.main_score = sales * 1_000_000 + promotion * 100_000 + available * 10_000 + reviews + is_default
+        else:
+            variant.main_score = is_default * 1_000_000 + promotion * 100_000 + available * 10_000 + reviews
+
+    variants.sort(key=lambda variant: (-variant.main_score, variant.asin))
+    winner = variants[0]
+    winner.is_suspected_main = True
+    if (winner.monthly_sales_estimate or 0) > 0:
+        confidence = "high" if sum((v.monthly_sales_estimate or 0) > 0 for v in variants) >= 2 else "medium"
+        reason = f"月销量信号最高：{winner.recent_sales_signal}"
+    elif winner.asin == default_asin:
+        confidence = "low"
+        reason = "所有子体均无月销量信号，按 Amazon 默认选中子体排序"
+    else:
+        confidence = "low"
+        reason = "无月销量信号，综合促销、库存和评分数排序"
+    winner.main_reason = reason
+    return winner.asin, confidence, reason
+
+
 async def _auth_pending(page: Page) -> bool:
     """Return True for every known step in Amazon's sign-in/MFA flow."""
     if page.is_closed():
@@ -442,6 +499,9 @@ async def _scrape_in_context(
                         "recent_sales_signal", "image", "images", "bullets",
                     ):
                         setattr(candidate, key, initial[key])
+                candidate.monthly_sales_estimate = _monthly_sales_estimate(
+                    candidate.recent_sales_signal
+                )
                 candidate.data_quality = "partial"
                 fast_variants.append(candidate)
             child_snapshots = [initial]
@@ -487,6 +547,7 @@ async def _scrape_in_context(
             promotion=item["promotion"], availability=item["availability"],
             rating=item["rating"], rating_count=item["rating_count"],
             recent_sales_signal=item["recent_sales_signal"], image=item["image"],
+            monthly_sales_estimate=_monthly_sales_estimate(item["recent_sales_signal"]),
             images=item["images"], bullets=item["bullets"], url=item["url"],
             data_quality="complete" if item["title"] and item["image"] and (item["price"] or item["availability"]) else "partial",
             warnings=[],
@@ -494,6 +555,9 @@ async def _scrape_in_context(
         for item in child_snapshots
     ]
     root = child_snapshots[0] if child_snapshots else initial
+    suspected_asin, suspected_confidence, suspected_reason = _rank_suspected_main(
+        variants, initial["asin"]
+    )
     reviews = await _collect_reviews(context, base_url, root["asin"], max_review_pages, headless)
     if not reviews:
         warnings.append("登录后仍未读取到评论；该商品可能暂无可访问评论，或 Amazon 当前限制了评论页。")
@@ -509,6 +573,9 @@ async def _scrape_in_context(
         collected_at=datetime.now(timezone.utc),
         data_quality="complete" if variants and all(v.data_quality == "complete" for v in variants) else "partial",
         warnings=warnings, expected_child_count=expected_child_count,
+        suspected_main_asin=suspected_asin,
+        suspected_main_confidence=suspected_confidence,
+        suspected_main_reason=suspected_reason,
     )
 
 

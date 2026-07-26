@@ -20,6 +20,10 @@ class Variant(BaseModel):
     rating: float | None = None
     rating_count: int | None = None
     recent_sales_signal: str | None = None
+    monthly_sales_estimate: int | None = None
+    is_suspected_main: bool = False
+    main_score: float = 0
+    main_reason: str | None = None
     image: str | None = None
     images: list[str] = Field(default_factory=list)
     bullets: list[str] = Field(default_factory=list)
@@ -77,6 +81,9 @@ class ProductResult(BaseModel):
     data_quality: Literal["complete", "partial"]
     warnings: list[str] = Field(default_factory=list)
     expected_child_count: int | None = None
+    suspected_main_asin: str | None = None
+    suspected_main_confidence: Literal["high", "medium", "low"] | None = None
+    suspected_main_reason: str | None = None
 
 
 class ScrapeRequest(BaseModel):
