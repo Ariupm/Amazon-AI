@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+import asyncio
+from io import BytesIO
+
+import httpx
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as ExcelImage
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from PIL import Image as PILImage
+
+from .models import BatchResult
+
+
+HEADERS = [
+    "图片", "输入 ASIN", "父体 ASIN", "疑似主销", "子体 ASIN", "标题",
+    "颜色", "尺寸", "当前价格", "Typical price", "折扣", "月销量信号",
+    "月销量估算", "评分", "评分数", "库存", "数据完整度", "判断依据",
+]
+
+
+async def _download_image(
+    client: httpx.AsyncClient,
+    url: str | None,
+    semaphore: asyncio.Semaphore,
+) -> BytesIO | None:
+    if not url:
+        return None
+    try:
+        async with semaphore:
+            response = await client.get(url, timeout=20)
+            response.raise_for_status()
+        source = PILImage.open(BytesIO(response.content))
+        source.thumbnail((82, 82))
+        if source.mode not in ("RGB", "RGBA"):
+            source = source.convert("RGBA")
+        output = BytesIO()
+        source.save(output, format="PNG")
+        output.seek(0)
+        return output
+    except Exception:
+        return None
+
+
+async def build_products_xlsx(batch: BatchResult) -> BytesIO:
+    rows: list[tuple] = []
+    image_urls: list[str | None] = []
+    for item in batch.items:
+        if not item.success or not item.result:
+            rows.append(("", item.requested_asin, "", "", "", f"采集失败：{item.error or ''}", "", "", "", "", "", "", "", "", "", "", "失败", ""))
+            image_urls.append(None)
+            continue
+        product = item.result
+        for variant in product.variants:
+            rows.append((
+                "", item.requested_asin, product.parent_asin or "",
+                "是" if variant.is_suspected_main else "否", variant.asin,
+                variant.title or "", variant.color or "", variant.size or "",
+                variant.price or "", variant.list_price or "", variant.discount or "",
+                variant.recent_sales_signal or "", variant.monthly_sales_estimate,
+                variant.rating, variant.rating_count, variant.availability or "",
+                "完整" if variant.data_quality == "complete" else "部分",
+                variant.main_reason or "",
+            ))
+            image_urls.append(variant.image)
+
+    semaphore = asyncio.Semaphore(8)
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "Mozilla/5.0"},
+        follow_redirects=True,
+    ) as client:
+        images = await asyncio.gather(*[
+            _download_image(client, url, semaphore) for url in image_urls
+        ])
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "商品子体"
+    sheet.append(HEADERS)
+    for row in rows:
+        sheet.append(row)
+
+    header_fill = PatternFill("solid", fgColor="173F35")
+    main_fill = PatternFill("solid", fgColor="E8F4EE")
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 26
+    sheet.freeze_panes = "B2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{sheet.max_row}"
+
+    image_streams: list[BytesIO] = []
+    for index, image_stream in enumerate(images, start=2):
+        sheet.row_dimensions[index].height = 68
+        if sheet.cell(index, 4).value == "是":
+            for cell in sheet[index]:
+                cell.fill = main_fill
+        for cell in sheet[index]:
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+        if image_stream:
+            image_streams.append(image_stream)
+            image = ExcelImage(image_stream)
+            image.width = 82
+            image.height = 82
+            sheet.add_image(image, f"A{index}")
+
+    widths = [14, 15, 15, 11, 15, 54, 18, 16, 14, 16, 12, 24, 14, 10, 12, 22, 12, 38]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output

@@ -212,8 +212,16 @@ async def _extract_variants(page: Page, base_url: str) -> list[Variant]:
             for asin, values in json.loads(match.group(1)).items():
                 if not re.fullmatch(r"[A-Z0-9]{10}", asin):
                     continue
+                # Amazon does not guarantee that dimensionValuesDisplayData
+                # uses the same order as variationValues. Label only a
+                # single-dimension family; otherwise preserve neutral options
+                # until the child detail page confirms Color/Size explicitly.
                 attributes = {
-                    (dimension_names[index] if index < len(dimension_names) else f"Option {index + 1}"): str(value)
+                    (
+                        dimension_names[index]
+                        if len(dimension_names) == 1 and index < len(dimension_names)
+                        else f"Option {index + 1}"
+                    ): str(value)
                     for index, value in enumerate(values)
                 }
                 attributes["option"] = " / ".join(str(value) for value in values)
@@ -270,6 +278,44 @@ async def _variation_attributes(page: Page) -> tuple[str | None, str | None, dic
             attributes[feature.replace("_name", "").replace("_", " ").title()] = value
     color = attributes.get("Color")
     size = attributes.get("Size")
+    # Newer Amazon layouts render the selected value as plain label text
+    # ("Color: Beige") instead of a .selection element.
+    for feature, label in [("color_name", "Color"), ("size_name", "Size")]:
+        if (label == "Color" and color) or (label == "Size" and size):
+            continue
+        container = page.locator(f"#variation_{feature}").first
+        if not await container.count():
+            continue
+        container_text = await container.inner_text()
+        match = re.search(rf"{label}\s*:\s*([^\r\n]+)", container_text, re.I)
+        if match:
+            value = re.sub(r"\s+", " ", match.group(1)).strip()
+            # Keep only the value on the label line, not option cards below it.
+            if value:
+                attributes[label] = value
+                if label == "Color":
+                    color = value
+                else:
+                    size = value
+    # The container ID may say pattern/style while its visible label says Color.
+    # Trust the reader-facing label, which is what the user sees.
+    variation_containers = page.locator("[id^='variation_']")
+    for index in range(await variation_containers.count()):
+        text = await variation_containers.nth(index).inner_text()
+        for label in ("Color", "Size"):
+            if (label == "Color" and color) or (label == "Size" and size):
+                continue
+            match = re.search(rf"{label}\s*:\s*([^\r\n]+)", text, re.I)
+            if not match:
+                continue
+            value = re.sub(r"\s+", " ", match.group(1)).strip()
+            if not value:
+                continue
+            attributes[label] = value
+            if label == "Color":
+                color = value
+            else:
+                size = value
     # Some layouts expose selected attributes only in the product details table.
     if not color or not size:
         rows = page.locator("#productDetails_detailBullets_sections1 tr, #productDetails_techSpec_section_1 tr")
