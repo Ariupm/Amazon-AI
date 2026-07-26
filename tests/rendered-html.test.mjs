@@ -73,7 +73,7 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /同品牌同尺寸重复项/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
-  assert.match(workspace, /keyword-workflow-v6/);
+  assert.match(workspace, /title-generation-v7/);
   assert.match(workspace, /旧版本机抓取器仍占用 8765 端口/);
   assert.match(workspace, /正在检查本机抓取器版本/);
   assert.match(workspace, /未连接到本机抓取器/);
@@ -83,6 +83,9 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /scrollIntoView/);
   assert.match(workspace, /ABA 综合词库尚未通过读取校验/);
   assert.match(workspace, /api\/keywords\/inspect/);
+  assert.match(workspace, /api\/titles\/generate/);
+  assert.match(workspace, /生成标题候选/);
+  assert.match(workspace, /复制完整标题/);
   assert.match(workspace, /新增颜色或新增尺寸至少填写一项/);
   assert.match(workspace, /查看待完成项/);
   assert.match(workspace, /focusSelector/);
@@ -98,7 +101,7 @@ test("renders child bullets with a product fallback", async () => {
 
 test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
-  assert.match(launcher, /keyword-workflow-v6/);
+  assert.match(launcher, /title-generation-v7/);
   assert.match(launcher, /检测到旧版抓取器/);
   assert.match(launcher, /netstat -ano/);
   assert.match(launcher, /Get-ListenerProcessId/);

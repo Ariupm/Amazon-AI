@@ -25,6 +25,8 @@ class KeywordFileTests(unittest.TestCase):
         self.assertEqual(result.keyword_column, "关键词")
         self.assertEqual(result.volume_columns, ["卖家精灵预测搜索量"])
         self.assertEqual(result.month_columns, ["月份"])
+        self.assertEqual(result.keywords[0].term, "washable area rug")
+        self.assertEqual(result.keywords[0].volume, 12000)
 
     def test_rejects_workbook_without_keyword_column(self):
         workbook = Workbook()

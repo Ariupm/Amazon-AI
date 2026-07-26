@@ -7,7 +7,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from .models import KeywordFileSummary
+from .models import KeywordEntry, KeywordFileSummary
 
 KEYWORD_ALIASES = ("关键词", "搜索词", "keyword", "search term", "query")
 VOLUME_ALIASES = ("搜索量", "月搜索量", "search volume", "流量", "预估搜索量")
@@ -21,6 +21,18 @@ def _clean(value: object) -> str:
 def _matches(value: str, aliases: tuple[str, ...]) -> bool:
     lowered = value.lower()
     return any(alias in lowered for alias in aliases)
+
+
+def _numeric(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"[\d,.]+", _clean(value))
+    if not match:
+        return None
+    try:
+        return float(match.group(0).replace(",", ""))
+    except ValueError:
+        return None
 
 
 def inspect_keyword_file(filename: str, content: bytes) -> KeywordFileSummary:
@@ -74,25 +86,44 @@ def inspect_keyword_file(filename: str, content: bytes) -> KeywordFileSummary:
             warnings=["前 30 行未找到“关键词 / 搜索词 / Keyword”列。"],
         )
 
-    keywords: list[str] = []
+    keyword_map: dict[str, KeywordEntry] = {}
     for row in rows[header_index + 1:]:
         value = _clean(row[keyword_index] if keyword_index < len(row) else "")
-        if value and value not in keywords:
-            keywords.append(value)
+        if not value:
+            continue
+        volumes = [
+            numeric for index in volume_indexes
+            if index < len(row) and (numeric := _numeric(row[index])) is not None
+        ]
+        volume = max(volumes) if volumes else None
+        month = next(
+            (_clean(row[index]) for index in month_indexes if index < len(row) and _clean(row[index])),
+            None,
+        )
+        key = value.lower()
+        current = keyword_map.get(key)
+        if current is None or (volume or 0) > (current.volume or 0):
+            keyword_map[key] = KeywordEntry(term=value, volume=volume, month=month)
+
+    keyword_entries = sorted(
+        keyword_map.values(),
+        key=lambda item: (-(item.volume or 0), item.term.lower()),
+    )
 
     warnings: list[str] = []
     if not volume_indexes:
         warnings.append("未识别到搜索量列；仍可进入下一步，但无法按流量权重选词。")
-    if not keywords:
+    if not keyword_entries:
         warnings.append("关键词列下没有有效数据。")
     return KeywordFileSummary(
         filename=filename,
         sheet=sheet_name,
-        valid=bool(keywords),
-        rows=len(keywords),
+        valid=bool(keyword_entries),
+        rows=len(keyword_entries),
         keyword_column=headers[keyword_index],
         volume_columns=[headers[index] for index in volume_indexes],
         month_columns=[headers[index] for index in month_indexes],
-        preview=keywords[:5],
+        preview=[item.term for item in keyword_entries[:5]],
         warnings=warnings,
+        keywords=keyword_entries[:10_000],
     )

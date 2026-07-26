@@ -12,15 +12,16 @@ from fastapi.staticfiles import StaticFiles
 from .models import (
     BatchItemResult, BatchResult, BatchScrapeRequest, CompetitorDiscoverRequest,
     CompetitorDiscoverResult, CompetitorExportRequest, KeywordFileSummary,
-    ScrapeRequest,
+    ScrapeRequest, TitleGenerateRequest, TitleGenerateResult,
 )
 from .competitors import discover_competitors
 from .excel_export import build_competitors_xlsx, build_products_xlsx
 from .keyword_files import inspect_keyword_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
+from .title_generator import generate_titles
 
-FEATURE_VERSION = "keyword-workflow-v6"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.6.0")
+FEATURE_VERSION = "title-generation-v7"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.7.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -155,3 +156,11 @@ async def inspect_keywords(request: Request, filename: str) -> KeywordFileSummar
         return inspect_keyword_file(filename, content)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/titles/generate", response_model=TitleGenerateResult)
+async def title_generation(request: TitleGenerateRequest) -> TitleGenerateResult:
+    result = generate_titles(request)
+    if not result.candidates:
+        raise HTTPException(status_code=422, detail="真实资料不足，未能形成标题候选。")
+    return result

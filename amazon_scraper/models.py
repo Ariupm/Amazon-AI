@@ -216,3 +216,46 @@ class KeywordFileSummary(BaseModel):
     month_columns: list[str] = Field(default_factory=list)
     preview: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    keywords: list["KeywordEntry"] = Field(default_factory=list)
+
+
+class KeywordEntry(BaseModel):
+    term: str
+    volume: float | None = None
+    month: str | None = None
+
+
+class TitleGenerateRequest(BaseModel):
+    brand: str | None = None
+    product_title: str
+    bullets: list[str] = Field(default_factory=list, max_length=20)
+    competitor_titles: list[str] = Field(default_factory=list, max_length=100)
+    keywords: list[KeywordEntry] = Field(default_factory=list, max_length=10_000)
+    category: str | None = None
+    material: str | None = None
+    style: str | None = None
+    use_case: str | None = None
+    must_have: list[str] = Field(default_factory=list, max_length=30)
+    colors: list[str] = Field(default_factory=list, max_length=100)
+    sizes: list[str] = Field(default_factory=list, max_length=100)
+    title_format: Literal["classic", "split"] = "split"
+
+
+class TitleCandidate(BaseModel):
+    id: str
+    color: str | None = None
+    size: str | None = None
+    main_title: str
+    highlight_item: str | None = None
+    full_title: str
+    main_count: int
+    highlight_count: int = 0
+    full_count: int
+    keywords_used: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TitleGenerateResult(BaseModel):
+    candidates: list[TitleCandidate]
+    traffic_keywords: list[KeywordEntry] = Field(default_factory=list)
+    rules: list[str] = Field(default_factory=list)
