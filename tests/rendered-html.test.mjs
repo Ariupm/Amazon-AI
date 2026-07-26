@@ -49,8 +49,14 @@ test("title workspace starts from real inputs without fake competitors", async (
   const response = await render("/titles");
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /资料准备与竞品发现/);
-  assert.match(html, /零资料也可以开始/);
+  assert.match(html, /明确标题任务/);
+  assert.match(html, /优化现有商品标题/);
+  assert.match(html, /编写新增变体标题/);
+  assert.match(html, /父体 ASIN/);
+  assert.match(html, /新增颜色/);
+  assert.match(html, /新增尺寸/);
+  assert.match(html, /主标题 ≤ 75 \+ Highlight Item ≤ 125/);
+  assert.doesNotMatch(html, /新增变体计划表|卖家 SKU|库存计划/);
   assert.match(html, /自动发现疑似竞品/);
   assert.match(html, /卖家精灵关键词表/);
   assert.doesNotMatch(html, /BAGSMART|LOVEVOOK|61\.2K|综合质量/);

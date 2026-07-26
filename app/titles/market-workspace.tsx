@@ -17,6 +17,8 @@ type Product = {
     rating?: number; rating_count?: number; recent_sales_signal?: string;
   }[];
 };
+type TaskMode = "optimize" | "new-variant";
+type TitleFormat = "classic" | "split";
 
 const uploadGuides = [
   ["卖家精灵关键词表", "提供真实搜索量、竞品覆盖和流量词。没有时搜索量显示未知。", ".xlsx,.xls,.csv"],
@@ -26,6 +28,8 @@ const uploadGuides = [
 ];
 
 export default function MarketWorkspace() {
+  const [taskMode, setTaskMode] = useState<TaskMode>("new-variant");
+  const [titleFormat, setTitleFormat] = useState<TitleFormat>("split");
   const [asin, setAsin] = useState("");
   const [marketplace, setMarketplace] = useState("US");
   const [product, setProduct] = useState<Product | null>(null);
@@ -37,12 +41,21 @@ export default function MarketWorkspace() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [newColors, setNewColors] = useState("");
+  const [newSizes, setNewSizes] = useState("");
 
   const selected = useMemo(() => candidates.filter(item => item.selected), [candidates]);
+  const colors = useMemo(() => splitLines(newColors), [newColors]);
+  const sizes = useMemo(() => splitLines(newSizes), [newSizes]);
+  const titleCount = taskMode === "new-variant" ? Math.max(1, colors.length) * Math.max(1, sizes.length) : 1;
+
+  function splitLines(value: string) {
+    return [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
+  }
 
   async function readProduct(event: FormEvent) {
     event.preventDefault();
-    if (!/^[A-Z0-9]{10}$/.test(asin)) return setMessage("请输入有效的 10 位本品 ASIN。");
+    if (!/^[A-Z0-9]{10}$/.test(asin)) return setMessage(`请输入有效的 10 位${taskMode === "new-variant" ? "父体" : "子体"} ASIN。`);
     setLoading("product"); setMessage("正在调用本机 Chrome 读取本品真实资料…");
     try {
       const response = await fetch(`${API}/api/scrape/batch`, {
@@ -52,7 +65,7 @@ export default function MarketWorkspace() {
       const batch = await response.json();
       if (!response.ok || !batch.items?.[0]?.success) throw new Error(batch.detail || batch.items?.[0]?.error || "读取失败");
       setProduct(batch.items[0].result);
-      setMessage("本品资料已读取。请确认图片和商品事实，再发现竞品。");
+      setMessage(taskMode === "new-variant" ? "父体及现有子体资料已读取。请填写准备新增的颜色和尺寸。" : "该子体资料已读取。请确认商品事实，再发现竞品。");
     } catch (error) {
       setMessage(error instanceof TypeError ? "请先运行本机“启动真实抓取器.bat”。" : error instanceof Error ? error.message : "读取失败");
     } finally { setLoading(""); }
@@ -108,31 +121,49 @@ export default function MarketWorkspace() {
 
   return <main className="titleApp">
     <header className="topbar"><a className="brand" href="/"><span className="brandMark">采</span><span>采数</span></a><nav><a href="/">数据采集</a><a className="active" href="/titles">标题工作台</a></nav><span className="workspaceStatus"><i /> 真实资料模式</span></header>
-    <section className="titleHero"><div><span className="eyebrow"><i /> TITLE COPILOT</span><h1>标题半自动化工作台</h1><p>从真实商品和竞品开始。没有资料也没关系，按页面提示逐项补充。</p></div><div className="workflowBadge"><span>当前阶段</span><b>01 · 资料准备与竞品发现</b><small>所有候选都需要人工确认</small></div></section>
+    <section className="titleHero"><div><span className="eyebrow"><i /> TITLE COPILOT</span><h1>标题半自动化工作台</h1><p>读取真实商品、竞品与关键词资料，为现有商品优化标题，或为新增颜色和尺寸编写标题。</p></div><div className="workflowBadge"><span>当前阶段</span><b>01 · 明确标题任务</b><small>AI 生成候选，人工确认最终版本</small></div></section>
     <div className="marketShell">
-      <aside className="studioSteps"><p>真实工作流</p>{[["01","准备本品","ASIN / 图片 / 商品事实"],["02","发现竞品","自动候选 + 人工 ASIN"],["03","确认竞品","排除不相关商品"],["04","关键词资料","ABA / 卖家精灵 / 广告"],["05","标题规则","生成、检查与导出"]].map(([no,title,desc], index) => <button className={index === 0 ? "active" : confirmed && index < 3 ? "done" : ""} key={no}><span>{confirmed && index < 3 ? "✓" : no}</span><div><b>{title}</b><small>{desc}</small></div></button>)}</aside>
+      <aside className="studioSteps"><p>真实工作流</p>{[["01","选择任务","修改标题 / 新增变体标题"],["02","准备本品","ASIN / 产品部资料"],["03","竞品研究","自动候选 + 人工 ASIN"],["04","关键词资料","ABA / 卖家精灵 / 广告"],["05","生成标题","规则检查、确认与导出"]].map(([no,title,desc], index) => <button className={index === 0 ? "active" : confirmed && index < 3 ? "done" : ""} key={no}><span>{confirmed && index < 3 ? "✓" : no}</span><div><b>{title}</b><small>{desc}</small></div></button>)}</aside>
       <section className="marketContent">
-        <div className="guideBanner"><b>零资料也可以开始</b><span>至少提供“本品 ASIN”或“一张商品主图”。资料越完整，竞品识别和标题选词越可靠。</span></div>
-        <article className="panel sourcePanel">
-          <div className="panelHead"><div><h3>1. 获取本品真实资料</h3><p>推荐优先使用 ASIN；图片和商品事实用于补充与人工校正</p></div><span className="requiredMark">至少完成一项</span></div>
-          <div className="sourceGrid">
-            <form className="asinSource" onSubmit={readProduct}><label>本品 ASIN</label><div><input value={asin} maxLength={10} onChange={e => setAsin(e.target.value.toUpperCase().replace(/\s/g, ""))} placeholder="例如 B0XXXXXXXX" /><select value={marketplace} onChange={e => setMarketplace(e.target.value)}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select><button disabled={loading === "product"}>{loading === "product" ? "读取中…" : "读取商品"}</button></div>{product && <div className="targetMini">{product.images[0] && <img src={product.images[0]} alt="" />}<span><b>{product.title}</b><small>{product.asin} · {product.price || "价格未展示"} · 五点 {product.bullets.length} 条</small></span></div>}</form>
-            <label className="imageSource"><span>上传商品主图</span><input type="file" accept="image/*" onChange={uploadImage} />{imagePreview ? <img src={imagePreview} alt="上传预览" /> : <div><b>＋ 选择图片</b><small>JPG / PNG / WEBP</small></div>}</label>
+        <div className="guideBanner"><b>先选择本次任务</b><span>修改标题读取具体子体；新增颜色或尺寸的标题读取父体，并继承同父体下已经验证的真实商品信息。</span></div>
+        <article className="panel taskPanel">
+          <div className="panelHead"><div><h3>1. 选择标题任务</h3><p>两种任务需要的 ASIN 和生成逻辑不同</p></div><span className="requiredMark">必选</span></div>
+          <div className="taskChoices">
+            <button className={taskMode === "optimize" ? "selected" : ""} onClick={() => { setTaskMode("optimize"); setProduct(null); }}>
+              <span>修改</span><b>优化现有商品标题</b><p>输入具体子体 ASIN，仅优化该商品；保留其真实颜色、尺寸和卖点。</p>
+            </button>
+            <button className={taskMode === "new-variant" ? "selected" : ""} onClick={() => { setTaskMode("new-variant"); setProduct(null); }}>
+              <span>新增</span><b>编写新增变体标题</b><p>输入父体 ASIN，再填写将新增的颜色与尺寸；这里只写标题，不负责创建变体。</p>
+            </button>
           </div>
+        </article>
+        <article className="panel sourcePanel">
+          <div className="panelHead"><div><h3>2. 获取本品真实资料</h3><p>{taskMode === "new-variant" ? "读取父体和现有子体，提炼同系列可继承的标题骨架与真实卖点" : "读取需要修改标题的具体子体，只使用该商品真实具备的属性"}</p></div><span className="requiredMark">ASIN 必填</span></div>
+          <div className="sourceGrid">
+            <form className="asinSource" onSubmit={readProduct}><label>{taskMode === "new-variant" ? "父体 ASIN" : "需要修改的子体 ASIN"}</label><div><input value={asin} maxLength={10} onChange={e => setAsin(e.target.value.toUpperCase().replace(/\s/g, ""))} placeholder="例如 B0XXXXXXXX" /><select value={marketplace} onChange={e => setMarketplace(e.target.value)}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select><button disabled={loading === "product"}>{loading === "product" ? "读取中…" : taskMode === "new-variant" ? "读取父体" : "读取子体"}</button></div>{product && <div className="targetMini">{product.images[0] && <img src={product.images[0]} alt="" />}<span><b>{product.title}</b><small>{product.asin} · {product.price || "价格未展示"} · 五点 {product.bullets.length} 条{taskMode === "new-variant" ? ` · 已读取 ${product.variants.length} 个现有子体` : ""}</small></span></div>}</form>
+            <label className="imageSource"><span>上传产品部资料图</span><input type="file" accept="image/*,.pdf" onChange={uploadImage} />{imagePreview ? <img src={imagePreview} alt="上传预览" /> : <div><b>＋ 选择资料</b><small>产品结构、材质、工艺、洗护与可证明卖点</small></div>}</label>
+          </div>
+          {taskMode === "new-variant" && <div className="variantTitleInputs">
+            <div className="variantIntro"><b>新增标题变量</b><span>一行一个；系统按颜色 × 尺寸生成标题。新 ASIN 由商品在 Amazon 创建后产生，此处不需要填写。</span></div>
+            <label>新增颜色<textarea value={newColors} onChange={e => setNewColors(e.target.value)} placeholder={"Beige\nDark Green\nBrown"} /></label>
+            <label>新增尺寸<textarea value={newSizes} onChange={e => setNewSizes(e.target.value)} placeholder={"2' x 3'\n5' x 7'\n8' x 10'"} /></label>
+            <div className="combinationCount"><span>预计生成</span><b>{titleCount}</b><small>个标题候选</small></div>
+          </div>}
+          <div className="titleFormatRow"><div><b>标题制式</b><span>生成前仍可切换</span></div><button className={titleFormat === "classic" ? "selected" : ""} onClick={() => setTitleFormat("classic")}><b>原标题</b><small>完整标题 ≤ 200 字符</small></button><button className={titleFormat === "split" ? "selected" : ""} onClick={() => setTitleFormat("split")}><b>二段标题</b><small>主标题 ≤ 75 + Highlight Item ≤ 125</small></button></div>
           <div className="factsGrid"><label>类目大词<input value={facts.category} onChange={e => setFacts({...facts, category:e.target.value})} placeholder="例如 Area Rug" /></label><label>材质<input value={facts.material} onChange={e => setFacts({...facts, material:e.target.value})} placeholder="例如 Polyester" /></label><label>风格 / 外观<input value={facts.style} onChange={e => setFacts({...facts, style:e.target.value})} placeholder="例如 Modern Abstract" /></label><label>主要用途<input value={facts.useCase} onChange={e => setFacts({...facts, useCase:e.target.value})} placeholder="例如 Living Room" /></label><label className="wideFact">必须真实具备的卖点<input value={facts.mustHave} onChange={e => setFacts({...facts, mustHave:e.target.value})} placeholder="用逗号分隔，例如 Washable, Non Slip, Low Pile" /></label></div>
         </article>
         <article className="panel discoverPanel">
-          <div className="panelHead"><div><h3>2. 发现并确认真实竞品</h3><p>系统找疑似候选，人工决定是否纳入研究</p></div><button onClick={discover} disabled={loading === "discover"}>{loading === "discover" ? "正在搜索…" : "自动发现疑似竞品"}</button></div>
+          <div className="panelHead"><div><h3>3. 发现并确认真实竞品</h3><p>系统找疑似候选，人工决定是否纳入研究</p></div><button onClick={discover} disabled={loading === "discover"}>{loading === "discover" ? "正在搜索…" : "自动发现疑似竞品"}</button></div>
           <div className="manualCompetitors"><textarea value={manualAsins} onChange={e => setManualAsins(e.target.value)} placeholder={"也可以一行一个批量添加竞品 ASIN\nB0XXXXXXXX\nB0YYYYYYYY"} /><button onClick={addManual} disabled={loading === "manual"}>{loading === "manual" ? "读取中…" : "添加人工竞品"}</button></div>
           {message && <div className="marketMessage">{message}</div>}
           {candidates.length ? <div className="candidateGrid">{candidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `图文相似 ${item.overall_similarity ?? "—"}%`}</span></div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}</p><label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div> : <div className="candidateEmpty"><b>还没有竞品候选</b><span>读取本品后点击“自动发现”，或直接批量添加你已知的竞品 ASIN。</span></div>}
           {candidates.length > 0 && <div className="confirmCompetitors"><span>已选择 <b>{selected.length}</b> 个竞品</span><button onClick={() => {setConfirmed(true);setMessage(`已确认 ${selected.length} 个竞品，可进入关键词资料准备。`)}}>确认竞品并锁定本轮研究</button></div>}
         </article>
         <article className="panel uploadPanel">
-          <div className="panelHead"><div><h3>3. 补充关键词与公司资料</h3><p>全部为可选；未上传时不会显示虚假搜索量</p></div><span className="selectedCount">{Object.keys(files).length} 个文件</span></div>
+          <div className="panelHead"><div><h3>4. 补充关键词与公司资料</h3><p>ABA 类目词库建议上传；未上传时不会显示虚假搜索量</p></div><span className="selectedCount">{Object.keys(files).length} 个文件</span></div>
           <div className="uploadGrid">{uploadGuides.map(([name,desc,accept]) => <label className="uploadCard" key={name}><input type="file" accept={accept} onChange={e => e.target.files?.[0] && setFiles({...files,[name]:e.target.files[0].name})} /><b>{files[name] ? "✓ " : "＋ "}{name}</b><p>{desc}</p><span>{files[name] || "点击选择文件"}</span></label>)}</div>
         </article>
-        <div className="nextPhase"><div><b>下一步：竞品标题结构与关键词池</b><span>只有确认后的真实竞品和已上传的数据会进入分析。</span></div><button disabled={!confirmed}>进入真实竞品研究 →</button></div>
+        <div className="nextPhase"><div><b>下一步：竞品标题结构、关键词池与标题候选</b><span>{taskMode === "new-variant" ? `将为 ${titleCount} 个颜色/尺寸组合分别生成，不创建 SKU 或 ASIN。` : "仅优化当前子体标题，不改变其颜色和尺寸。"}</span></div><button disabled={!confirmed || !product || (taskMode === "new-variant" && (!colors.length || !sizes.length))}>进入真实标题研究 →</button></div>
       </section>
     </div>
     <footer><span>采数 · 标题半自动化工作台</span><span>不生成虚假流量，不自动确认竞品</span></footer>
