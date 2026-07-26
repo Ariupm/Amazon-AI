@@ -121,6 +121,11 @@ class CompetitorDiscoverRequest(BaseModel):
     marketplace: Literal["US", "UK", "DE", "JP"] = "US"
     limit: int = Field(default=12, ge=3, le=24)
     headless: bool = False
+    category: str | None = None
+    material: str | None = None
+    style: str | None = None
+    use_case: str | None = None
+    features: list[str] = Field(default_factory=list)
 
 
 class CompetitorCandidate(BaseModel):
@@ -134,6 +139,11 @@ class CompetitorCandidate(BaseModel):
     recent_sales_signal: str | None = None
     text_similarity: int
     image_similarity: int | None = None
+    attribute_similarity: int = 0
+    market_similarity: int = 0
+    category_match: bool = False
+    auto_selected: bool = False
+    match_reasons: list[str] = Field(default_factory=list)
     overall_similarity: int
     source: Literal["amazon_search"] = "amazon_search"
 
@@ -143,4 +153,6 @@ class CompetitorDiscoverResult(BaseModel):
     target_title: str
     target_image: str | None = None
     search_query: str
+    search_queries: list[str] = Field(default_factory=list)
+    category_rule: str | None = None
     candidates: list[CompetitorCandidate] = Field(default_factory=list)

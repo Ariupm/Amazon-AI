@@ -58,6 +58,9 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(html, /主标题 ≤ 75 \+ Highlight Item ≤ 125/);
   assert.doesNotMatch(html, /新增变体计划表|卖家 SKU|库存计划/);
   assert.match(html, /自动发现疑似竞品/);
+  assert.match(html, /类目不一致直接排除/);
+  assert.match(html, /真实属性 30%/);
+  assert.match(html, /总分达到 60 分才自动勾选/);
   assert.match(html, /卖家精灵关键词表/);
   assert.doesNotMatch(html, /BAGSMART|LOVEVOOK|61\.2K|综合质量/);
 });

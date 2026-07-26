@@ -8,6 +8,8 @@ type Candidate = {
   asin: string; title: string; url: string; image?: string; price?: string;
   rating?: number; rating_count?: number; recent_sales_signal?: string;
   text_similarity?: number; image_similarity?: number; overall_similarity?: number;
+  attribute_similarity?: number; market_similarity?: number; category_match?: boolean;
+  auto_selected?: boolean; match_reasons?: string[];
   selected?: boolean; source: "amazon_search" | "manual";
 };
 type Product = {
@@ -77,12 +79,18 @@ export default function MarketWorkspace() {
     try {
       const response = await fetch(`${API}/api/competitors/discover`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asin, marketplace, limit: 12, headless: false }),
+        body: JSON.stringify({
+          asin, marketplace, limit: 12, headless: false,
+          category: facts.category || null, material: facts.material || null,
+          style: facts.style || null, use_case: facts.useCase || null,
+          features: facts.mustHave.split(/[,，\n]+/).map(value => value.trim()).filter(Boolean),
+        }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || "竞品发现失败");
-      setCandidates(result.candidates.map((item: Candidate, index: number) => ({ ...item, selected: index < 6, source: "amazon_search" })));
-      setMessage(`已按“${result.search_query}”找到 ${result.candidates.length} 个疑似竞品，请人工确认。`);
+      setCandidates(result.candidates.map((item: Candidate) => ({ ...item, selected: item.auto_selected, source: "amazon_search" })));
+      const selectedCount = result.candidates.filter((item: Candidate) => item.auto_selected).length;
+      setMessage(`使用 ${result.search_queries?.length || 1} 组搜索，经过“${result.category_rule}”过滤后保留 ${result.candidates.length} 个候选，其中 ${selectedCount} 个达到 60 分门槛。`);
     } catch (error) {
       setMessage(error instanceof TypeError ? "请先运行本机真实抓取器。" : error instanceof Error ? error.message : "竞品发现失败");
     } finally { setLoading(""); }
@@ -154,9 +162,10 @@ export default function MarketWorkspace() {
         </article>
         <article className="panel discoverPanel">
           <div className="panelHead"><div><h3>3. 发现并确认真实竞品</h3><p>系统找疑似候选，人工决定是否纳入研究</p></div><button onClick={discover} disabled={loading === "discover"}>{loading === "discover" ? "正在搜索…" : "自动发现疑似竞品"}</button></div>
+          <div className="competitorRules"><b>筛选规则</b><span>类目不一致直接排除</span><span>视觉 30%</span><span>真实属性 30%</span><span>标题词 25%</span><span>价格与市场信号 15%</span><small>总分达到 60 分才自动勾选，最终仍由人工确认。</small></div>
           <div className="manualCompetitors"><textarea value={manualAsins} onChange={e => setManualAsins(e.target.value)} placeholder={"也可以一行一个批量添加竞品 ASIN\nB0XXXXXXXX\nB0YYYYYYYY"} /><button onClick={addManual} disabled={loading === "manual"}>{loading === "manual" ? "读取中…" : "添加人工竞品"}</button></div>
           {message && <div className="marketMessage">{message}</div>}
-          {candidates.length ? <div className="candidateGrid">{candidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `图文相似 ${item.overall_similarity ?? "—"}%`}</span></div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}</p><label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div> : <div className="candidateEmpty"><b>还没有竞品候选</b><span>读取本品后点击“自动发现”，或直接批量添加你已知的竞品 ASIN。</span></div>}
+          {candidates.length ? <div className="candidateGrid">{candidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `竞品匹配 ${item.overall_similarity ?? "—"}分`}</span></div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}</p>{item.source !== "manual" && <><div className="scoreBreakdown"><span>标题词 {item.text_similarity ?? "—"}</span><span>属性 {item.attribute_similarity ?? "—"}</span><span>视觉 {item.image_similarity ?? "—"}</span><span>市场 {item.market_similarity ?? "—"}</span></div><p className="matchReasons">{item.match_reasons?.join(" · ") || "等待人工核验"}</p></>}<label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div> : <div className="candidateEmpty"><b>还没有竞品候选</b><span>读取本品后点击“自动发现”，或直接批量添加你已知的竞品 ASIN。</span></div>}
           {candidates.length > 0 && <div className="confirmCompetitors"><span>已选择 <b>{selected.length}</b> 个竞品</span><button onClick={() => {setConfirmed(true);setMessage(`已确认 ${selected.length} 个竞品，可进入关键词资料准备。`)}}>确认竞品并锁定本轮研究</button></div>}
         </article>
         <article className="panel uploadPanel">

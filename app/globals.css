@@ -144,3 +144,10 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 .titleFormatRow>button small{color:#78837f}
 .titleFormatRow>button.selected{border-color:#08775e;background:#f2faf6;box-shadow:0 0 0 1px #08775e}
 @media(max-width:850px){.taskChoices,.titleFormatRow{grid-template-columns:1fr}.variantTitleInputs{grid-template-columns:1fr}.variantIntro{display:grid}.combinationCount{border-left:0;border-top:1px solid #d4dfd9;padding-top:14px}}
+.scoreBreakdown{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0}
+.scoreBreakdown span{background:#edf3f0;border-radius:999px;padding:4px 8px;font-size:11px;color:#31534a}
+.matchReasons{font-size:11px!important;color:#75827e!important;line-height:1.5!important;margin:4px 0 10px!important}
+.competitorRules{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:12px 14px;border:1px solid #dce8e2;background:#f5faf7;border-radius:12px;color:#436159}
+.competitorRules b{color:#11372e;margin-right:3px}
+.competitorRules span{background:#fff;border:1px solid #dce5e1;border-radius:999px;padding:4px 8px;font-size:11px}
+.competitorRules small{margin-left:auto;color:#70817c}
