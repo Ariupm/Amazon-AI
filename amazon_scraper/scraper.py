@@ -269,13 +269,42 @@ async def _image_urls(page: Page) -> list[str]:
 
 async def _variation_attributes(page: Page) -> tuple[str | None, str | None, dict[str, str]]:
     attributes: dict[str, str] = {}
-    for feature in ["color_name", "size_name", "style_name", "pattern_name", "item_package_quantity"]:
+    feature_labels = {
+        "color_name": "Color",
+        "size_name": "Size",
+        "style_name": "Style",
+        "pattern_name": "Pattern",
+        "item_package_quantity": "Item Package Quantity",
+    }
+    for feature, attribute_label in feature_labels.items():
         value = await _text(page, [
             f"#variation_{feature} .selection",
             f"#variation_{feature} .a-dropdown-prompt",
+            f"#inline-twister-expanded-dimension-text-{feature}",
+            f"[data-csa-c-content-id='inline-twister-expanded-dimension-text-{feature}']",
+            f"#variation_{feature} select option:checked",
+            f"#variation_{feature} .a-button-selected .a-button-text",
+            f"#variation_{feature} [aria-checked='true']",
         ])
+        # Some selected swatches expose the value only as an accessible label.
+        if not value:
+            selected = page.locator(
+                f"#variation_{feature} .a-button-selected, "
+                f"#variation_{feature} [aria-checked='true'], "
+                f"#variation_{feature} input:checked"
+            ).first
+            if await selected.count():
+                for name in ("aria-label", "title", "value"):
+                    candidate = await selected.get_attribute(name)
+                    if candidate and candidate.strip():
+                        value = candidate.strip()
+                        break
         if value:
-            attributes[feature.replace("_name", "").replace("_", " ").title()] = value
+            value = re.sub(r"\s+", " ", value).strip()
+            # Strip labels from accessible text such as "Size: 2' x 6'".
+            value = re.sub(rf"^{re.escape(attribute_label)}\s*:\s*", "", value, flags=re.I).strip()
+            if value:
+                attributes[attribute_label] = value
     color = attributes.get("Color")
     size = attributes.get("Size")
     # Newer Amazon layouts render the selected value as plain label text
