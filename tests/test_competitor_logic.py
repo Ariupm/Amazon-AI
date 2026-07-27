@@ -1,6 +1,7 @@
 import unittest
 
 from amazon_scraper.competitors import (
+    _decode_reference_image,
     _dedupe_and_sort_candidates,
     _title_brand,
     _title_size,
@@ -29,6 +30,15 @@ def candidate(
 
 
 class CompetitorLogicTests(unittest.TestCase):
+    def test_decodes_uploaded_reference_image_data(self):
+        import base64
+
+        content = b"fake-image-bytes"
+        encoded = "data:image/png;base64," + base64.b64encode(content).decode()
+
+        self.assertEqual(_decode_reference_image(encoded), content)
+        self.assertIsNone(_decode_reference_image("data:text/plain;base64,Zm9v"))
+
     def test_extracts_brand_and_size_without_using_size_as_search_input(self):
         title = "SHACOS Soft Cozy 2' x 3' Washable High Low Pile Area Rug"
         self.assertEqual(_title_brand(title), "SHACOS")

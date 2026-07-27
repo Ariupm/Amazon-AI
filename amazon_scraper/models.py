@@ -117,7 +117,9 @@ class BatchResult(BaseModel):
 
 
 class CompetitorDiscoverRequest(BaseModel):
-    asin: str = Field(pattern=r"^[A-Za-z0-9]{10}$")
+    asin: str | None = Field(default=None, pattern=r"^[A-Za-z0-9]{10}$")
+    target_name: str | None = Field(default=None, max_length=160)
+    reference_image_data: str | None = Field(default=None, max_length=12_000_000)
     marketplace: Literal["US", "UK", "DE", "JP"] = "US"
     limit: int = Field(default=24, ge=6, le=60)
     search_pages: int = Field(default=1, ge=1, le=3)

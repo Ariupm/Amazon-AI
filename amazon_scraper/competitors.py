@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import math
 import re
 from io import BytesIO
@@ -154,7 +155,14 @@ async def _visual_fingerprint(
     try:
         response = await client.get(url, timeout=15)
         response.raise_for_status()
-        image = Image.open(BytesIO(response.content)).convert("RGB")
+        return _visual_fingerprint_bytes(response.content)
+    except Exception:
+        return None
+
+
+def _visual_fingerprint_bytes(content: bytes) -> dict[str, list[float]] | None:
+    try:
+        image = Image.open(BytesIO(content)).convert("RGB")
         # Remove near-white marketplace background before comparing shape, texture and color.
         background = Image.new("RGB", image.size, (255, 255, 255))
         difference = ImageChops.difference(image, background).convert("L")
@@ -176,6 +184,19 @@ async def _visual_fingerprint(
             raw = channel.histogram()
             histogram.extend(sum(raw[start:start + 32]) / (24 * 24) for start in range(0, 256, 32))
         return {"structure": structure, "edges": edge_values, "color": histogram}
+    except Exception:
+        return None
+
+
+def _decode_reference_image(data_url: str | None) -> bytes | None:
+    if not data_url:
+        return None
+    try:
+        header, encoded = data_url.split(",", 1)
+        if ";base64" not in header or not header.lower().startswith("data:image/"):
+            return None
+        content = base64.b64decode(encoded, validate=True)
+        return content if 0 < len(content) <= 8 * 1024 * 1024 else None
     except Exception:
         return None
 
@@ -300,7 +321,7 @@ def _dedupe_and_sort_candidates(
 
 
 async def discover_competitors(
-    context: BrowserContext, asin: str, marketplace: str, limit: int, headless: bool,
+    context: BrowserContext, asin: str | None, marketplace: str, limit: int, headless: bool,
     category: str | None = None, material: str | None = None, style: str | None = None,
     use_case: str | None = None, features: list[str] | None = None,
     custom_queries: list[str] | None = None,
@@ -309,13 +330,24 @@ async def discover_competitors(
     exclude_asins: list[str] | None = None,
     reference_titles: list[str] | None = None,
     reference_bullets: list[str] | None = None,
+    target_name: str | None = None,
+    reference_image_data: str | None = None,
 ) -> CompetitorDiscoverResult:
     features = features or []
     base_url, _ = MARKETPLACES[marketplace]
     page = context.pages[0] if context.pages else await context.new_page()
-    await page.goto(f"{base_url}/dp/{asin.upper()}", wait_until="domcontentloaded", timeout=60_000)
-    await _challenge(page, headless, "本品页面")
-    target = await _snapshot(page, base_url, asin.upper())
+    if asin:
+        await page.goto(f"{base_url}/dp/{asin.upper()}", wait_until="domcontentloaded", timeout=60_000)
+        await _challenge(page, headless, "本品页面")
+        target = await _snapshot(page, base_url, asin.upper())
+    else:
+        supplied_title = re.sub(r"\s+", " ", target_name or category or "").strip()
+        if not supplied_title or not category:
+            raise ValueError("全新商品模式至少需要类目大词和产品名称/特征资料。")
+        target = {
+            "asin": "NEW-PRODUCT", "title": supplied_title, "image": None,
+            "images": [], "price": None, "bullets": list(reference_bullets or []),
+        }
     # Build the product profile from the real title + bullets + confirmed facts,
     # not from the title alone.
     family_titles = [value for value in (reference_titles or []) if value]
@@ -336,13 +368,14 @@ async def discover_competitors(
         value.upper() for value in (exclude_asins or [])
         if re.fullmatch(r"[A-Za-z0-9]{10}", value)
     }
-    own_asins.update({asin.upper(), target["asin"]})
-    parent_asin = await _parent_asin(page)
-    if parent_asin:
-        own_asins.add(parent_asin)
-    for variant in await _extract_variants(page, base_url):
-        own_asins.add(variant.asin)
-    brand_text = await _text(page, ["#bylineInfo"])
+    if asin:
+        own_asins.update({asin.upper(), target["asin"]})
+        parent_asin = await _parent_asin(page)
+        if parent_asin:
+            own_asins.add(parent_asin)
+        for variant in await _extract_variants(page, base_url):
+            own_asins.add(variant.asin)
+    brand_text = await _text(page, ["#bylineInfo"]) if asin else None
     target_brand = _clean_brand(confirmed_brand or brand_text) or ""
     target_brand_token = (_tokens(target_brand) or [None])[0]
     if not target_brand_token:
@@ -479,6 +512,9 @@ async def discover_competitors(
     target_fingerprints = [
         fingerprint_by_url[url] for url in target_image_urls if fingerprint_by_url.get(url)
     ]
+    uploaded_fingerprint = _visual_fingerprint_bytes(_decode_reference_image(reference_image_data) or b"")
+    if uploaded_fingerprint:
+        target_fingerprints.insert(0, uploaded_fingerprint)
 
     candidates: list[CompetitorCandidate] = []
     target_price = _price(target.get("price"))
@@ -556,7 +592,8 @@ async def discover_competitors(
     parent_count = len({item.parent_asin or item.asin for item in candidates})
     brand_count = len({item.brand.lower() for item in candidates if item.brand})
     return CompetitorDiscoverResult(
-        target_asin=asin.upper(), target_title=target["title"], target_image=target["image"],
+        target_asin=asin.upper() if asin else "NEW-PRODUCT",
+        target_title=target["title"], target_image=target["image"],
         search_query=search_queries[0], search_queries=search_queries,
         category_rule=f"同一细分类目：{family_name}" if family_name else "未识别到稳定类目，需人工确认",
         target_features=target_features, excluded_own_asins=len(own_asins),
