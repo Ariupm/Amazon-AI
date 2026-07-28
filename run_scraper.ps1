@@ -5,7 +5,7 @@ $port = 8765
 $healthUrl = "http://127.0.0.1:$port/health"
 $openApiUrl = "http://127.0.0.1:$port/openapi.json"
 $pageUrl = "http://127.0.0.1:$port"
-$requiredFeatureVersion = "hundred-competitor-candidates-v14"
+$requiredFeatureVersion = "competitor-funnel-v15"
 
 function Get-ListenerProcessId {
     $connection = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
@@ -80,7 +80,7 @@ try {
         throw "抓取器启动超时。"
     }
     Start-Process $pageUrl
-    Write-Host "最新版真实抓取器已启动（百个竞品候选 v14）。关闭此窗口可停止服务。" -ForegroundColor Green
+    Write-Host "最新版真实抓取器已启动（竞品候选漏斗 v15）。关闭此窗口可停止服务。" -ForegroundColor Green
     Wait-Process -Id $server.Id
 } finally {
     if (Get-Process -Id $server.Id -ErrorAction SilentlyContinue) {

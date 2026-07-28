@@ -478,6 +478,9 @@ async def discover_competitors(
 
     raw_by_asin: dict[str, dict] = {}
     excluded_same_brand = 0
+    search_card_count = 0
+    excluded_own_results = 0
+    excluded_by_terms = 0
     for query in search_queries:
         for search_page in range(1, search_pages + 1):
             await page.goto(
@@ -490,12 +493,17 @@ async def discover_competitors(
             for index in range(await cards.count()):
                 card = cards.nth(index)
                 candidate_asin = (await card.get_attribute("data-asin") or "").upper()
-                if not re.fullmatch(r"[A-Z0-9]{10}", candidate_asin) or candidate_asin in own_asins:
+                if not re.fullmatch(r"[A-Z0-9]{10}", candidate_asin):
+                    continue
+                search_card_count += 1
+                if candidate_asin in own_asins:
+                    excluded_own_results += 1
                     continue
                 title = await _text(card, ["h2 span", "h2 a span"])  # type: ignore[arg-type]
                 if not title:
                     continue
                 if any(term in title.lower() for term in normalized_exclusions):
+                    excluded_by_terms += 1
                     continue
                 # Another listing from the user's own brand is not a competitor,
                 # even when it belongs to a different parent family.
@@ -542,6 +550,7 @@ async def discover_competitors(
             / total_query_weight * 100
         )
         eligible.append(item)
+    excluded_by_product_type = len(raw_by_asin) - len(eligible)
     # Allocate the broad candidate pool by the operator-confirmed weights.
     # Each enabled query gets a proportional quota; duplicates count once and
     # unused quota is filled by the strongest remaining candidates.
@@ -745,5 +754,11 @@ async def discover_competitors(
         collapsed_same_brand_size=collapsed_same_parent,
         competitor_parent_count=parent_count,
         competitor_brand_count=brand_count,
+        search_card_count=search_card_count,
+        unique_search_asins=len(raw_by_asin),
+        excluded_own_results=excluded_own_results,
+        excluded_by_terms=excluded_by_terms,
+        excluded_by_product_type=excluded_by_product_type,
+        weighted_pool_count=len(weighted_pool),
         candidates=candidates,
     )

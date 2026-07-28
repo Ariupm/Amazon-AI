@@ -204,6 +204,12 @@ class CompetitorDiscoverResult(BaseModel):
     collapsed_same_brand_size: int = 0
     competitor_parent_count: int = 0
     competitor_brand_count: int = 0
+    search_card_count: int = 0
+    unique_search_asins: int = 0
+    excluded_own_results: int = 0
+    excluded_by_terms: int = 0
+    excluded_by_product_type: int = 0
+    weighted_pool_count: int = 0
     candidates: list[CompetitorCandidate] = Field(default_factory=list)
 
 
