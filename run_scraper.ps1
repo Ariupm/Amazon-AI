@@ -4,7 +4,7 @@ Set-Location -LiteralPath $PSScriptRoot
 $port = 8765
 $healthUrl = "http://127.0.0.1:$port/health"
 $openApiUrl = "http://127.0.0.1:$port/openapi.json"
-$pageUrl = "http://127.0.0.1:$port"
+$pageUrl = "https://caishu-amazon-insights.chumoiii.chatgpt.site/titles"
 $requiredFeatureVersion = "competitor-funnel-v15"
 
 function Get-ListenerProcessId {
