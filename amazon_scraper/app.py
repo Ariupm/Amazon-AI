@@ -28,6 +28,8 @@ app.add_middleware(
         "https://caishu-amazon-insights.chumoiii.chatgpt.site",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
