@@ -3,6 +3,8 @@ import unittest
 from amazon_scraper.competitors import (
     _decode_reference_image,
     _dedupe_and_sort_candidates,
+    _matches_product_type,
+    build_competitor_plan,
     _title_brand,
     _title_size,
 )
@@ -57,6 +59,23 @@ class CompetitorLogicTests(unittest.TestCase):
             [item.asin for item in result],
             ["B000000004", "B000000002"],
         )
+
+    def test_dynamic_product_type_gate_works_outside_legacy_families(self):
+        self.assertTrue(_matches_product_type(
+            "dish drying mat", "Microfiber Dish Drying Mat for Kitchen Counter",
+        ))
+        self.assertFalse(_matches_product_type(
+            "dish drying mat", "Stainless Steel Dish Drying Rack",
+        ))
+
+    def test_plan_keeps_common_functions_out_of_primary_query(self):
+        plan = build_competitor_plan(
+            "Microfiber Dish Drying Mat", "dish drying mat", "microfiber", None,
+            "kitchen counter", ["machine washable", "non slip"], [], [],
+        )
+        self.assertEqual(plan.search_queries[0], "dish drying mat")
+        self.assertNotIn("non slip", plan.search_queries[0])
+        self.assertIn("dish drying rack", plan.excluded_terms)
 
 
 if __name__ == "__main__":

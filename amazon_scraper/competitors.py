@@ -11,7 +11,7 @@ import httpx
 from PIL import Image, ImageChops, ImageFilter, ImageStat
 from playwright.async_api import BrowserContext
 
-from .models import CompetitorCandidate, CompetitorDiscoverResult
+from .models import CompetitorCandidate, CompetitorDiscoverResult, CompetitorPlanResult
 from .scraper import (
     MARKETPLACES, _challenge, _extract_variants, _monthly_sales_estimate,
     _number, _parent_asin, _rating, _snapshot, _text,
@@ -133,11 +133,16 @@ def _queries(title: str, evidence: str, category: str | None, material: str | No
         "Machine Washable", "Non Slip", "Polyester",
     ]
     signals = [label for label in priority if label in detected_set or label in explicit]
+    discriminating = [item for item in signals if item not in {"Machine Washable", "Non Slip"}]
+    validation = [item for item in signals if item in {"Machine Washable", "Non Slip"}]
+    # Use a layered plan: broad category first, then one defining material,
+    # construction/style, and finally one common function as validation.
     queries = [
-        _unique_words(category_seed, " ".join(signals[:3]), limit=8),
-        _unique_words(category_seed, " ".join(signals[1:4]), limit=8),
-        _unique_words(category_seed, " ".join(signals[3:6]), limit=8),
-        _unique_words(category_seed, " ".join(signals[-3:]), limit=8),
+        category_seed,
+        _unique_words(category_seed, material, limit=7),
+        _unique_words(category_seed, style or (discriminating[0] if discriminating else None), limit=7),
+        _unique_words(category_seed, discriminating[1] if len(discriminating) > 1 else None, limit=7),
+        _unique_words(category_seed, validation[0] if validation else None, limit=7),
     ]
     result = [query for query in dict.fromkeys(queries) if query and len(query.split()) >= 2]
     # If the real page exposes few useful attributes, preserve one focused
@@ -145,6 +150,72 @@ def _queries(title: str, evidence: str, category: str | None, material: str | No
     if len(result) < 2:
         result.append(_unique_words(category_seed, title, limit=6))
     return list(dict.fromkeys(result)), profile[:10]
+
+
+def build_competitor_plan(
+    target_name: str | None, category: str | None, material: str | None,
+    style: str | None, use_case: str | None, features: list[str] | None,
+    reference_titles: list[str] | None, reference_bullets: list[str] | None,
+) -> CompetitorPlanResult:
+    title = re.sub(r"\s+", " ", target_name or next(iter(reference_titles or []), "") or category or "").strip()
+    product_type = re.sub(r"\s+", " ", category or "").strip()
+    if not title or not product_type:
+        raise ValueError("请先确认类目大词和本品资料，再生成竞品搜索方案。")
+    evidence = " ".join([*(reference_titles or []), *(reference_bullets or [])])
+    queries, target_features = _queries(
+        title, evidence, product_type, material, style, use_case, features or [],
+    )
+    definition_parts = [product_type]
+    if material:
+        definition_parts.append(f"材质/技术路线：{material}")
+    if style:
+        definition_parts.append(f"形态/外观：{style}")
+    if features:
+        definition_parts.append("核心特征：" + "、".join(features[:6]))
+    lower_type = product_type.lower()
+    excluded = []
+    if "drying mat" in lower_type:
+        excluded = ["dish drying rack", "faucet mat", "sink protector", "drying tray"]
+    return CompetitorPlanResult(
+        product_type=product_type,
+        direct_competitor_definition="；".join(definition_parts),
+        target_features=target_features,
+        search_queries=queries[:6],
+        excluded_terms=excluded,
+        guidance=[
+            "核心类目词负责召回；材质、结构或外观每次只增加一个决定性条件。",
+            "可水洗、防滑等常见功能只作补充验证，不与多个功能词堆叠。",
+            "确认直接竞品定义、搜索词和排除项后，系统才会访问 Amazon。",
+        ],
+    )
+
+
+def _product_type_score(product_type: str, candidate_title: str) -> int:
+    required = set(_tokens(product_type))
+    candidate = set(_tokens(candidate_title))
+    if not required:
+        return 0
+    return round(len(required & candidate) / len(required) * 100)
+
+
+def _matches_product_type(product_type: str, candidate_title: str) -> bool:
+    family_name, _ = _family(product_type)
+    candidate_family, _ = _family(candidate_title)
+    if family_name:
+        return candidate_family == family_name
+    ordered_required = _tokens(product_type)
+    required = set(ordered_required)
+    if not required:
+        return True
+    # The final noun normally identifies the actual product form (mat, rack,
+    # bag, curtain...). Requiring it prevents adjacent accessories that share
+    # intent words from passing, such as "dish drying rack" for a drying mat.
+    head_noun = ordered_required[-1]
+    candidate_tokens = set(_tokens(candidate_title))
+    if head_noun not in candidate_tokens:
+        return False
+    minimum = max(1, math.ceil(len(required) * .60))
+    return len(required & candidate_tokens) >= minimum
 
 
 async def _visual_fingerprint(
@@ -332,6 +403,9 @@ async def discover_competitors(
     target_name: str | None = None,
     reference_image_data: str | None = None,
     verify_detail_pages: bool = False,
+    product_type: str | None = None,
+    direct_competitor_definition: str | None = None,
+    excluded_terms: list[str] | None = None,
 ) -> CompetitorDiscoverResult:
     features = features or []
     base_url, _ = MARKETPLACES[marketplace]
@@ -361,7 +435,11 @@ async def discover_competitors(
         if 2 <= len(re.sub(r"\s+", " ", query).strip()) <= 120
     ]
     search_queries = list(dict.fromkeys(custom_queries))[:6] or generated_queries
-    family_name, family_words = _family(f"{category or ''} {target['title']}")
+    confirmed_product_type = re.sub(r"\s+", " ", product_type or category or "").strip()
+    family_name, family_words = _family(f"{confirmed_product_type} {target['title']}")
+    normalized_exclusions = [
+        value.lower().strip() for value in (excluded_terms or []) if value.strip()
+    ]
     # Exclude the complete target family. Otherwise Amazon search often returns
     # another color/size of the user's own product and it looks like a competitor.
     own_asins = {
@@ -405,6 +483,8 @@ async def discover_competitors(
                 title = await _text(card, ["h2 span", "h2 a span"])  # type: ignore[arg-type]
                 if not title:
                     continue
+                if any(term in title.lower() for term in normalized_exclusions):
+                    continue
                 # Another listing from the user's own brand is not a competitor,
                 # even when it belongs to a different parent family.
                 title_tokens = _tokens(title)
@@ -436,8 +516,7 @@ async def discover_competitors(
     target_feature_set = set(target_features)
     eligible = []
     for item in raw_by_asin.values():
-        candidate_family, _ = _family(item["title"])
-        if family_name and candidate_family != family_name:
+        if confirmed_product_type and not _matches_product_type(confirmed_product_type, item["title"]):
             continue
         other_features = set(_feature_profile(item["title"]))
         feature_coverage = (
@@ -478,6 +557,10 @@ async def discover_competitors(
     )[: min(max(limit + 6, 12), 60)]
 
     if verify_detail_pages:
+        # Detail verification is intentionally a shortlist operation. Search
+        # pages handle broad recall; only the strongest 20 representatives
+        # incur full detail-page navigation.
+        eligible = eligible[: min(20, max(12, limit))]
         for item in eligible:
             try:
                 await page.goto(item["url"], wait_until="domcontentloaded", timeout=60_000)
@@ -548,7 +631,11 @@ async def discover_competitors(
         compared_pairs = len(pair_scores)
         rating_count = item.get("rating_count") or _number(item["rating_count_text"])
         market_score = _market_score(target_price, _price(item["price"]), rating_count, item["sales"])
-        overall = round((image_score or 0) * .20 + attr_score * .30 + text_score * .40 + market_score * .10)
+        product_type_score = _product_type_score(confirmed_product_type, item["title"])
+        overall = round(
+            product_type_score * .35 + attr_score * .30
+            + text_score * .15 + (image_score or 0) * .20
+        )
         reasons = []
         if family_name:
             reasons.append(f"同类目：{family_name}")
@@ -575,7 +662,8 @@ async def discover_competitors(
             monthly_sales_estimate=sales_estimate, text_similarity=text_score,
             image_similarity=image_score, visual_images_compared=compared_pairs,
             visual_reason=visual_reason, attribute_similarity=attr_score,
-            market_similarity=market_score, category_match=True,
+            market_similarity=market_score, market_value=market_score,
+            product_type_similarity=product_type_score, category_match=True,
             auto_selected=overall >= 60, match_reasons=reasons,
             overall_similarity=overall,
         ))

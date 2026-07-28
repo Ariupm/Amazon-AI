@@ -132,9 +132,32 @@ class CompetitorDiscoverRequest(BaseModel):
     brand: str | None = None
     features: list[str] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list, max_length=6)
+    product_type: str | None = Field(default=None, max_length=120)
+    direct_competitor_definition: str | None = Field(default=None, max_length=500)
+    excluded_terms: list[str] = Field(default_factory=list, max_length=30)
     exclude_asins: list[str] = Field(default_factory=list, max_length=1000)
     reference_titles: list[str] = Field(default_factory=list, max_length=100)
     reference_bullets: list[str] = Field(default_factory=list, max_length=100)
+
+
+class CompetitorPlanRequest(BaseModel):
+    target_name: str | None = Field(default=None, max_length=160)
+    category: str | None = None
+    material: str | None = None
+    style: str | None = None
+    use_case: str | None = None
+    features: list[str] = Field(default_factory=list, max_length=30)
+    reference_titles: list[str] = Field(default_factory=list, max_length=100)
+    reference_bullets: list[str] = Field(default_factory=list, max_length=100)
+
+
+class CompetitorPlanResult(BaseModel):
+    product_type: str
+    direct_competitor_definition: str
+    target_features: list[str] = Field(default_factory=list)
+    search_queries: list[str] = Field(default_factory=list)
+    excluded_terms: list[str] = Field(default_factory=list)
+    guidance: list[str] = Field(default_factory=list)
 
 
 class CompetitorCandidate(BaseModel):
@@ -156,6 +179,8 @@ class CompetitorCandidate(BaseModel):
     visual_reason: str | None = None
     attribute_similarity: int = 0
     market_similarity: int = 0
+    market_value: int = 0
+    product_type_similarity: int = 0
     category_match: bool = False
     auto_selected: bool = False
     match_reasons: list[str] = Field(default_factory=list)

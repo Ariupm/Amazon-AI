@@ -11,17 +11,18 @@ from fastapi.staticfiles import StaticFiles
 
 from .models import (
     BatchItemResult, BatchResult, BatchScrapeRequest, CompetitorDiscoverRequest,
-    CompetitorDiscoverResult, CompetitorExportRequest, KeywordFileSummary,
+    CompetitorDiscoverResult, CompetitorExportRequest, CompetitorPlanRequest,
+    CompetitorPlanResult, KeywordFileSummary,
     ScrapeRequest, TitleGenerateRequest, TitleGenerateResult,
 )
-from .competitors import discover_competitors
+from .competitors import build_competitor_plan, discover_competitors
 from .excel_export import build_competitors_xlsx, build_products_xlsx
 from .keyword_files import inspect_keyword_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 from .title_generator import generate_titles
 
-FEATURE_VERSION = "search-first-brand-dedupe-v11"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.11.0")
+FEATURE_VERSION = "confirmed-competitor-plan-v12"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.12.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -133,7 +134,8 @@ async def competitor_discovery(request: CompetitorDiscoverRequest) -> Competitor
                     request.search_pages, request.exclude_asins,
                     request.reference_titles, request.reference_bullets,
                     request.target_name, request.reference_image_data,
-                    request.verify_detail_pages,
+                    request.verify_detail_pages, request.product_type,
+                    request.direct_competitor_definition, request.excluded_terms,
                 )
             except ScrapeError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
@@ -141,6 +143,18 @@ async def competitor_discovery(request: CompetitorDiscoverRequest) -> Competitor
                 raise HTTPException(status_code=422, detail=str(error)) from error
             except Exception as error:
                 raise HTTPException(status_code=500, detail=f"竞品发现失败：{error}") from error
+
+
+@app.post("/api/competitors/plan", response_model=CompetitorPlanResult)
+async def competitor_plan(request: CompetitorPlanRequest) -> CompetitorPlanResult:
+    try:
+        return build_competitor_plan(
+            request.target_name, request.category, request.material, request.style,
+            request.use_case, request.features, request.reference_titles,
+            request.reference_bullets,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/api/competitors/export/xlsx")

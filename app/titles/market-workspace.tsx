@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "search-first-brand-dedupe-v11";
+const REQUIRED_BACKEND = "confirmed-competitor-plan-v12";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
@@ -11,6 +11,7 @@ type Candidate = {
   rating?: number; rating_count?: number; recent_sales_signal?: string;
   monthly_sales_estimate?: number;
   text_similarity?: number; image_similarity?: number; overall_similarity?: number;
+  product_type_similarity?: number; market_value?: number;
   visual_images_compared?: number; visual_reason?: string;
   attribute_similarity?: number; market_similarity?: number; category_match?: boolean;
   auto_selected?: boolean; match_reasons?: string[];
@@ -50,6 +51,10 @@ type CompetitorTitleAnalysis = {
   sample_size: number; common_openings: string[]; common_features: string[];
   recommended_structure: string; consumer_note: string;
 };
+type SearchPlan = {
+  productType: string; directDefinition: string; excludedTerms: string;
+  features: string[]; guidance: string[];
+};
 
 const uploadGuides = [
   { key: "aba", name: "ABA 综合词库", desc: "必填；可以直接包含每月补充的卖家精灵预测搜索量。", accept: ".xlsx,.csv" },
@@ -77,6 +82,7 @@ export default function MarketWorkspace() {
   const [newColors, setNewColors] = useState("");
   const [newSizes, setNewSizes] = useState("");
   const [customQueries, setCustomQueries] = useState("");
+  const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
   const [discoveryMeta, setDiscoveryMeta] = useState<{features:string[];queries:string[];excluded:number;sameBrand:number;collapsed:number;parents:number;brands:number} | null>(null);
   const [searchPages, setSearchPages] = useState(1);
   const [verifyDetailPages, setVerifyDetailPages] = useState(false);
@@ -113,6 +119,7 @@ export default function MarketWorkspace() {
   function resetDiscovery() {
     setCandidates([]);
     setCustomQueries("");
+    setSearchPlan(null);
     setDiscoveryMeta(null);
     setCandidatePage(1);
     setConfirmed(false);
@@ -165,9 +172,51 @@ export default function MarketWorkspace() {
     } finally { setLoading(""); }
   }
 
+  function competitorSourcePayload() {
+    return {
+      target_name: taskMode === "new-product"
+        ? [facts.brand, facts.productName || facts.category, facts.material, facts.style, facts.mustHave].filter(Boolean).join(" ")
+        : product?.title || null,
+      category: facts.category || null, material: facts.material || null,
+      style: facts.style || null, use_case: facts.useCase || null,
+      features: facts.mustHave.split(/[,，\n]+/).map(value => value.trim()).filter(Boolean),
+      reference_titles: product ? [product.title, ...product.variants.map(variant => variant.title || "")].filter(Boolean) : [],
+      reference_bullets: product ? [...product.bullets, ...product.variants.flatMap(variant => variant.bullets || [])] : [facts.material, facts.style, facts.useCase, facts.mustHave].filter(Boolean),
+    };
+  }
+
+  async function prepareSearchPlan() {
+    if (!sourceReady) return setMessage(taskMode === "new-product" ? "请先完整填写新品资料。" : "请先读取本品资料。");
+    if (!facts.category.trim()) return setMessage("请先填写并确认类目大词，用于定义直接竞品的产品类型。");
+    setLoading("plan"); setMessage("正在整理本品画像、分层搜索词与排除建议，不会访问 Amazon…");
+    try {
+      await ensureCurrentBackend();
+      const response = await fetch(`${API}/api/competitors/plan`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(competitorSourcePayload()),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "搜索方案生成失败");
+      setSearchPlan({
+        productType: result.product_type,
+        directDefinition: result.direct_competitor_definition,
+        excludedTerms: (result.excluded_terms || []).join("\n"),
+        features: result.target_features || [],
+        guidance: result.guidance || [],
+      });
+      setCustomQueries((result.search_queries || []).join("\n"));
+      setCandidates([]); setDiscoveryMeta(null); setConfirmed(false);
+      setMessage("搜索方案已生成。请确认产品类型、直接竞品定义、搜索词和排除项，再开始抓取。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "搜索方案生成失败");
+    } finally { setLoading(""); }
+  }
+
   async function discover() {
     if (taskMode !== "new-product" && !/^[A-Z0-9]{10}$/.test(asin)) return setMessage("自动发现需要先输入并读取本品 ASIN。");
     if (taskMode === "new-product" && !newProductReady) return setMessage("全新商品请先完整填写类目、材质、风格、产品特征和至少一个尺寸。");
+    if (!searchPlan) return setMessage("请先生成并确认竞品搜索方案。");
+    if (!customQueries.trim()) return setMessage("请至少保留一组确认后的搜索词。");
     setLoading("discover"); setMessage(imageData ? `正在按产品事实搜索 Amazon，并用上传图片与候选${verifyDetailPages ? "详情图" : "搜索页主图"}进行视觉比对…` : "正在按产品事实搜索 Amazon；未上传产品图，本轮不计算视觉相似度…");
     try {
       await ensureCurrentBackend();
@@ -175,18 +224,16 @@ export default function MarketWorkspace() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           asin: taskMode === "new-product" ? null : asin,
-          target_name: taskMode === "new-product" ? [facts.brand, facts.productName || facts.category, facts.material, facts.style, facts.mustHave].filter(Boolean).join(" ") : null,
+          ...competitorSourcePayload(),
           reference_image_data: taskMode === "new-product" ? imageData || null : null,
           marketplace, limit: resultLimit, search_pages: searchPages,
           verify_detail_pages: verifyDetailPages, headless: false,
-          category: facts.category || null, material: facts.material || null,
-          style: facts.style || null, use_case: facts.useCase || null,
+          product_type: searchPlan.productType,
+          direct_competitor_definition: searchPlan.directDefinition,
+          excluded_terms: splitLines(searchPlan.excludedTerms),
           brand: product?.brand || facts.brand || null,
-          features: facts.mustHave.split(/[,，\n]+/).map(value => value.trim()).filter(Boolean),
           search_queries: customQueries.split(/\r?\n/).map(value => value.trim()).filter(Boolean),
           exclude_asins: product ? [product.asin, product.requested_asin, ...product.variants.map(variant => variant.asin)] : [],
-          reference_titles: product ? [product.title, ...product.variants.map(variant => variant.title || "")].filter(Boolean) : [],
-          reference_bullets: product ? [...product.bullets, ...product.variants.flatMap(variant => variant.bullets || [])] : [facts.material, facts.style, facts.useCase, facts.mustHave].filter(Boolean),
         }),
       });
       const result = await response.json();
@@ -202,7 +249,7 @@ export default function MarketWorkspace() {
       });
       setCustomQueries(returnedQueries.join("\n"));
       const selectedCount = result.candidates.filter((item: Candidate) => item.auto_selected).length;
-      setMessage(`已按月销量信号从高到低排序；同品牌只保留 1 个，合并 ${result.collapsed_same_brand_size || 0} 个重复候选，当前覆盖 ${result.competitor_brand_count || 0} 个品牌，保留 ${result.candidates.length} 个候选，其中 ${selectedCount} 个达到 60 分门槛。`);
+      setMessage(`已按确认方案完成搜索；同品牌只保留 1 个，合并 ${result.collapsed_same_brand_size || 0} 个重复候选，当前覆盖 ${result.competitor_brand_count || 0} 个品牌，保留 ${result.candidates.length} 个候选，其中 ${selectedCount} 个产品相似度达到 60 分。`);
     } catch (error) {
       setMessage(error instanceof TypeError ? "请先运行本机真实抓取器。" : error instanceof Error ? error.message : "竞品发现失败");
     } finally { setLoading(""); }
@@ -448,12 +495,13 @@ export default function MarketWorkspace() {
           <div className="factsGrid"><label>品牌（新品可选）<input value={facts.brand} onChange={e => setFacts({...facts, brand:e.target.value})} placeholder="例如 GENIMO" /></label><label>产品名称（新品可选）<input value={facts.productName} onChange={e => setFacts({...facts, productName:e.target.value})} placeholder="例如 Textured Area Rug" /></label><label>类目大词{taskMode === "new-product" && <em>新品必填</em>}<input value={facts.category} onChange={e => setFacts({...facts, category:e.target.value})} placeholder="例如 Area Rug" /></label><label>材质{taskMode === "new-product" && <em>新品必填</em>}<input value={facts.material} onChange={e => setFacts({...facts, material:e.target.value})} placeholder="例如 Polyester" /></label><label>风格 / 外观{taskMode === "new-product" && <em>新品必填</em>}<input value={facts.style} onChange={e => setFacts({...facts, style:e.target.value})} placeholder="例如 Modern Abstract / Arch Pattern" /></label><label>主要用途（可由尺寸辅助判断）<input value={facts.useCase} onChange={e => setFacts({...facts, useCase:e.target.value})} placeholder="例如 Living Room" /></label><label className="wideFact">必须真实具备的产品特征{taskMode === "new-product" && <em>新品必填</em>}<input value={facts.mustHave} onChange={e => setFacts({...facts, mustHave:e.target.value})} placeholder="结构、工艺、功能用逗号分隔，例如 High Low Pile, Washable, Non Slip" /></label></div>
         </article>
         <article className="panel discoverPanel" id="competitor-discovery">
-          <div className="panelHead"><div><h3>3. 发现并确认真实竞品</h3><p>默认从搜索页获取，每个竞品品牌只保留 1 个；尺寸不进入系统搜索词{backendVersion && <em className="backendVersion"> · 本机 v{backendVersion}</em>}</p></div><div className="discoverActions"><label>Amazon 翻页<select value={searchPages} onChange={e => setSearchPages(Number(e.target.value))}><option value={1}>1 页</option><option value={2}>2 页</option><option value={3}>3 页</option></select></label><label><input type="checkbox" checked={verifyDetailPages} onChange={e => setVerifyDetailPages(e.target.checked)} />详情页复核</label><label>最多保留<select value={resultLimit} onChange={e => setResultLimit(Number(e.target.value))}><option value={24}>24 个</option><option value={40}>40 个</option><option value={60}>60 个</option></select></label><button onClick={discover} disabled={loading === "discover"}>{loading === "discover" ? "正在搜索…" : "自动发现疑似竞品"}</button></div></div>
-          <div className="competitorRules"><b>筛选与排序</b><span>识别到类目族时排除跨类目商品</span><span>每个竞品品牌只留 1 款</span><span>月销量信号优先排序</span><span>标题关键词 40%</span><span>真实属性 30%</span><span>多图视觉 20%</span><span>价格与市场信号 10%</span><small>视觉分比较去白底后的轮廓 55%＋纹理边缘 25%＋颜色 20%，取多图最佳两组均值。</small></div>
-          {discoveryMeta && <div className="discoveryProfile"><div><b>本品特征画像</b><p>{discoveryMeta.features.length ? discoveryMeta.features.join(" · ") : "页面未识别到足够的差异化特征，请补充上方产品事实。"}</p></div><label><b>实际搜索词（可修改后一行一组，再次搜索）</b><textarea value={customQueries} onChange={event => setCustomQueries(event.target.value)} /></label><small>已排除本父体 {discoveryMeta.excluded} 个 ASIN及 {discoveryMeta.sameBrand} 个本品牌搜索结果；合并 {discoveryMeta.collapsed} 个同品牌重复项，当前覆盖 {discoveryMeta.brands} 个竞品品牌。修改搜索词后可再次搜索。</small></div>}
+          <div className="panelHead"><div><h3>3. 先确认方案，再发现竞品</h3><p>系统先整理画像和分层搜索词；你确认后才访问 Amazon{backendVersion && <em className="backendVersion"> · 本机 v{backendVersion}</em>}</p></div><div className="discoverActions"><button onClick={prepareSearchPlan} disabled={loading === "plan"}>{loading === "plan" ? "正在整理…" : searchPlan ? "重新生成搜索方案" : "生成搜索方案"}</button></div></div>
+          <div className="competitorRules"><b>产品相似度</b><span>产品类型 35%</span><span>真实属性 30%</span><span>标题特征证据 15%</span><span>图片外观 20%</span><b>市场价值另算</b><span>销量、评价与价格只用于排序，不增加产品相似度</span><small>先硬性排除非同产品类型和确认的排除项，再计算相似度；每个竞品品牌只保留 1 款。</small></div>
+          {searchPlan && <div className="discoveryProfile"><div><b>待确认的本品画像</b><p>{searchPlan.features.length ? searchPlan.features.join(" · ") : "暂未识别到稳定特征，请核对直接竞品定义。"}</p></div><label><b>产品类型（硬门槛）</b><input value={searchPlan.productType} onChange={event => setSearchPlan({...searchPlan, productType:event.target.value})} /></label><label><b>直接竞品定义</b><textarea value={searchPlan.directDefinition} onChange={event => setSearchPlan({...searchPlan, directDefinition:event.target.value})} /></label><label><b>确认搜索词（一行一组）</b><textarea value={customQueries} onChange={event => setCustomQueries(event.target.value)} /></label><label><b>必须排除的商品词（一行一个）</b><textarea value={searchPlan.excludedTerms} onChange={event => setSearchPlan({...searchPlan, excludedTerms:event.target.value})} placeholder={"dish drying rack\nfaucet mat"} /></label><small>{searchPlan.guidance.join(" ")}</small><div className="discoverActions"><label>Amazon 翻页<select value={searchPages} onChange={e => setSearchPages(Number(e.target.value))}><option value={1}>1 页</option><option value={2}>2 页</option><option value={3}>3 页</option></select></label><label><input type="checkbox" checked={verifyDetailPages} onChange={e => setVerifyDetailPages(e.target.checked)} />短名单详情页复核</label><label>最多保留<select value={resultLimit} onChange={e => setResultLimit(Number(e.target.value))}><option value={24}>24 个</option><option value={40}>40 个</option><option value={60}>60 个</option></select></label><button onClick={discover} disabled={loading === "discover"}>{loading === "discover" ? "正在搜索…" : "确认方案并搜索竞品"}</button></div></div>}
+          {discoveryMeta && <div className="discoveryProfile"><small>已排除本父体 {discoveryMeta.excluded} 个 ASIN及 {discoveryMeta.sameBrand} 个本品牌搜索结果；合并 {discoveryMeta.collapsed} 个同品牌重复项，当前覆盖 {discoveryMeta.brands} 个竞品品牌。</small></div>}
           <div className="manualCompetitors"><textarea value={manualAsins} onChange={e => setManualAsins(e.target.value)} placeholder={"也可以一行一个批量添加竞品 ASIN\nB0XXXXXXXX\nB0YYYYYYYY"} /><button onClick={addManual} disabled={loading === "manual"}>{loading === "manual" ? "读取中…" : "添加人工竞品"}</button></div>
           {message && <div className="marketMessage">{message}</div>}
-          {candidates.length ? <><div className="candidateToolbar"><span>共 {candidates.length} 个候选 · 月销量信号优先 · 第 {candidatePage}/{candidatePages} 页</span><div><button onClick={() => exportCompetitors("selected")} disabled={loading === "export"}>导出已选 XLSX</button><button onClick={() => exportCompetitors("all")} disabled={loading === "export"}>导出全部 XLSX</button></div></div><div className="candidateGrid">{visibleCandidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `竞品匹配 ${item.overall_similarity ?? "—"}分`}</span></div><div className="candidateIdentity"><b>{item.brand || "品牌未识别"}</b><span>{item.size || "尺寸未识别"}</span>{item.parent_asin && <span>父体 {item.parent_asin}</span>}</div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}{item.monthly_sales_estimate ? `（按 ${item.monthly_sales_estimate.toLocaleString()} 排序）` : ""}</p>{item.source !== "manual" && <><div className="scoreBreakdown"><span>标题特征 {item.text_similarity ?? "—"}</span><span>属性 {item.attribute_similarity ?? "—"}</span><span title={item.visual_reason || ""}>视觉 {item.image_similarity ?? "—"} · {item.visual_images_compared || 0} 组</span><span>市场 {item.market_similarity ?? "—"}</span></div><p className="visualReason">{item.visual_reason}</p><p className="matchReasons">{item.match_reasons?.join(" · ") || "等待人工核验"}</p></>}<label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div><div className="candidatePagination"><button disabled={candidatePage <= 1} onClick={() => setCandidatePage(page => page - 1)}>← 上一页</button><span>{candidatePage} / {candidatePages}</span><button disabled={candidatePage >= candidatePages} onClick={() => setCandidatePage(page => page + 1)}>下一页 →</button></div></> : <div className="candidateEmpty"><b>还没有竞品候选</b><span>{taskMode === "new-product" ? "请填写完整新品资料并上传产品图，再点击“自动发现疑似竞品”." : "请先读取本品，再点击“自动发现”；父体模式会排除全部本品子体。"}</span></div>}
+          {candidates.length ? <><div className="candidateToolbar"><span>共 {candidates.length} 个候选 · 市场价值优先排序 · 第 {candidatePage}/{candidatePages} 页</span><div><button onClick={() => exportCompetitors("selected")} disabled={loading === "export"}>导出已选 XLSX</button><button onClick={() => exportCompetitors("all")} disabled={loading === "export"}>导出全部 XLSX</button></div></div><div className="candidateGrid">{visibleCandidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `产品相似度 ${item.overall_similarity ?? "—"}分`}</span></div><div className="candidateIdentity"><b>{item.brand || "品牌未识别"}</b><span>{item.size || "尺寸未识别"}</span>{item.parent_asin && <span>父体 {item.parent_asin}</span>}</div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}{item.monthly_sales_estimate ? `（按 ${item.monthly_sales_estimate.toLocaleString()} 排序）` : ""}</p>{item.source !== "manual" && <><div className="scoreBreakdown"><span>产品类型 {item.product_type_similarity ?? "—"}</span><span>属性 {item.attribute_similarity ?? "—"}</span><span>标题证据 {item.text_similarity ?? "—"}</span><span title={item.visual_reason || ""}>视觉 {item.image_similarity ?? "—"} · {item.visual_images_compared || 0} 组</span><span>市场价值 {item.market_value ?? item.market_similarity ?? "—"}</span></div><p className="visualReason">{item.visual_reason}</p><p className="matchReasons">{item.match_reasons?.join(" · ") || "等待人工核验"}</p></>}<label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div><div className="candidatePagination"><button disabled={candidatePage <= 1} onClick={() => setCandidatePage(page => page - 1)}>← 上一页</button><span>{candidatePage} / {candidatePages}</span><button disabled={candidatePage >= candidatePages} onClick={() => setCandidatePage(page => page + 1)}>下一页 →</button></div></> : <div className="candidateEmpty"><b>{searchPlan ? "等待确认搜索方案" : "还没有竞品搜索方案"}</b><span>{searchPlan ? "核对上方产品类型、直接竞品定义、搜索词和排除项，再点击“确认方案并搜索竞品”。" : "先准备本品资料，再点击“生成搜索方案”；系统不会立即访问 Amazon。"}</span></div>}
           {candidates.length > 0 && <div className="confirmCompetitors"><div><span>已选择 <b>{selected.length}</b> 个竞品</span>{confirmMessage && <small className={confirmed ? "confirmSuccess" : "confirmError"}>{confirmMessage}</small>}</div><button className={confirmed ? "locked" : ""} onClick={lockCompetitors}>{confirmed ? `✓ 已锁定 ${selected.length} 个竞品` : "确认竞品并锁定本轮研究"}</button></div>}
         </article>
         <article className="panel uploadPanel" id="keyword-materials">

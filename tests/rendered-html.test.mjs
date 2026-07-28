@@ -57,24 +57,25 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(html, /新增尺寸/);
   assert.match(html, /主标题 ≤ 75 \+ Highlight Item ≤ 125/);
   assert.doesNotMatch(html, /新增变体计划表|卖家 SKU|库存计划/);
-  assert.match(html, /自动发现疑似竞品/);
-  assert.match(html, /识别到类目族时排除跨类目商品/);
-  assert.match(html, /标题关键词 40%/);
+  assert.match(html, /生成搜索方案/);
+  assert.match(html, /确认后才访问 Amazon/);
+  assert.match(html, /产品类型 35%/);
+  assert.match(html, /标题特征证据 15%/);
   assert.match(html, /真实属性 30%/);
-  assert.match(html, /尺寸不进入系统搜索词/);
-  assert.match(html, /视觉 20%/);
-  assert.match(html, /Amazon 翻页/);
+  assert.match(html, /图片外观 20%/);
+  assert.match(html, /市场价值另算/);
   const workspace = await readFile(new URL("../app/titles/market-workspace.tsx", import.meta.url), "utf8");
-  assert.match(workspace, /本品特征画像/);
-  assert.match(workspace, /实际搜索词/);
-  assert.match(workspace, /每个竞品品牌只保留 1 个/);
-  assert.match(workspace, /月销量信号优先/);
-  assert.match(workspace, /轮廓 55%/);
-  assert.match(workspace, /可修改后一行一组/);
+  assert.match(workspace, /待确认的本品画像/);
+  assert.match(workspace, /确认搜索词/);
+  assert.match(workspace, /确认方案并搜索竞品/);
+  assert.match(workspace, /api\/competitors\/plan/);
+  assert.match(workspace, /每个竞品品牌只保留 1 款/);
+  assert.match(workspace, /市场价值优先排序/);
+  assert.match(workspace, /产品相似度/);
   assert.match(workspace, /同品牌重复项/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
-  assert.match(workspace, /search-first-brand-dedupe-v11/);
+  assert.match(workspace, /confirmed-competitor-plan-v12/);
   assert.match(workspace, /verify_detail_pages/);
   assert.match(workspace, /旧版本机抓取器仍占用 8765 端口/);
   assert.match(workspace, /正在检查本机抓取器版本/);
@@ -103,7 +104,7 @@ test("renders child bullets with a product fallback", async () => {
 
 test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
-  assert.match(launcher, /search-first-brand-dedupe-v11/);
+  assert.match(launcher, /confirmed-competitor-plan-v12/);
   assert.match(launcher, /检测到旧版抓取器/);
   assert.match(launcher, /netstat -ano/);
   assert.match(launcher, /Get-ListenerProcessId/);
