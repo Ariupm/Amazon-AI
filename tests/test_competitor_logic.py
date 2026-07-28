@@ -44,7 +44,7 @@ class CompetitorLogicTests(unittest.TestCase):
         self.assertEqual(_title_brand(title), "SHACOS")
         self.assertEqual(_title_size(title), "2' x 3'")
 
-    def test_keeps_one_monthly_sales_winner_per_brand_and_size(self):
+    def test_keeps_one_monthly_sales_winner_per_brand(self):
         values = [
             candidate("B000000001", "BrandA", "2x6", 100, 88),
             candidate("B000000002", "BrandA", "2' x 6'", 500, 70),
@@ -52,10 +52,10 @@ class CompetitorLogicTests(unittest.TestCase):
             candidate("B000000004", "BrandB", "2x6", 1000, 60),
         ]
         result, collapsed = _dedupe_and_sort_candidates(values)
-        self.assertEqual(collapsed, 1)
+        self.assertEqual(collapsed, 2)
         self.assertEqual(
             [item.asin for item in result],
-            ["B000000004", "B000000002", "B000000003"],
+            ["B000000004", "B000000002"],
         )
 
 

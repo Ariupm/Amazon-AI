@@ -20,8 +20,8 @@ from .keyword_files import inspect_keyword_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 from .title_generator import generate_titles
 
-FEATURE_VERSION = "new-product-visual-v9"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.9.0")
+FEATURE_VERSION = "search-first-brand-dedupe-v10"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.10.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -131,6 +131,7 @@ async def competitor_discovery(request: CompetitorDiscoverRequest) -> Competitor
                     request.search_pages, request.exclude_asins,
                     request.reference_titles, request.reference_bullets,
                     request.target_name, request.reference_image_data,
+                    request.verify_detail_pages,
                 )
             except ScrapeError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error

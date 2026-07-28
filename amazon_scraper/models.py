@@ -123,6 +123,7 @@ class CompetitorDiscoverRequest(BaseModel):
     marketplace: Literal["US", "UK", "DE", "JP"] = "US"
     limit: int = Field(default=24, ge=6, le=60)
     search_pages: int = Field(default=1, ge=1, le=3)
+    verify_detail_pages: bool = False
     headless: bool = False
     category: str | None = None
     material: str | None = None

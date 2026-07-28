@@ -66,14 +66,15 @@ test("title workspace starts from real inputs without fake competitors", async (
   const workspace = await readFile(new URL("../app/titles/market-workspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /本品特征画像/);
   assert.match(workspace, /实际搜索词/);
-  assert.match(workspace, /同品牌同尺寸/);
+  assert.match(workspace, /每个竞品品牌只保留 1 个/);
   assert.match(workspace, /月销量信号优先/);
   assert.match(workspace, /轮廓 55%/);
   assert.match(workspace, /可修改后一行一组/);
-  assert.match(workspace, /同品牌同尺寸重复项/);
+  assert.match(workspace, /同品牌重复项/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
-  assert.match(workspace, /title-generation-v7/);
+  assert.match(workspace, /search-first-brand-dedupe-v10/);
+  assert.match(workspace, /verify_detail_pages/);
   assert.match(workspace, /旧版本机抓取器仍占用 8765 端口/);
   assert.match(workspace, /正在检查本机抓取器版本/);
   assert.match(workspace, /未连接到本机抓取器/);
@@ -101,7 +102,7 @@ test("renders child bullets with a product fallback", async () => {
 
 test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
-  assert.match(launcher, /title-generation-v7/);
+  assert.match(launcher, /search-first-brand-dedupe-v10/);
   assert.match(launcher, /检测到旧版抓取器/);
   assert.match(launcher, /netstat -ano/);
   assert.match(launcher, /Get-ListenerProcessId/);

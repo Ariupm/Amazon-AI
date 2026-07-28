@@ -290,10 +290,9 @@ def _dedupe_and_sort_candidates(
     representative_by_group: dict[str, CompetitorCandidate] = {}
     for candidate in candidates:
         normalized_brand = (candidate.brand or "").strip().lower()
-        normalized_size = _normalize_size(candidate.size)
         group_key = (
-            f"brand-size:{normalized_brand}:{normalized_size}"
-            if normalized_brand and normalized_size
+            f"brand:{normalized_brand}"
+            if normalized_brand
             else f"parent:{candidate.parent_asin or candidate.asin}"
         )
         current = representative_by_group.get(group_key)
@@ -332,6 +331,7 @@ async def discover_competitors(
     reference_bullets: list[str] | None = None,
     target_name: str | None = None,
     reference_image_data: str | None = None,
+    verify_detail_pages: bool = False,
 ) -> CompetitorDiscoverResult:
     features = features or []
     base_url, _ = MARKETPLACES[marketplace]
@@ -453,8 +453,7 @@ async def discover_competitors(
     pregrouped: dict[str, dict] = {}
     for item in eligible:
         brand_key = (item.get("brand") or "").lower()
-        size_key = _normalize_size(item.get("size"))
-        key = f"{brand_key}:{size_key}" if brand_key and size_key else item["asin"]
+        key = f"brand:{brand_key}" if brand_key else item["asin"]
         current = pregrouped.get(key)
         item_rank = (
             _monthly_sales_estimate(item.get("sales")) or 0,
@@ -478,28 +477,29 @@ async def discover_competitors(
         ),
     )[: min(max(limit + 6, 12), 60)]
 
-    for item in eligible:
-        try:
-            await page.goto(item["url"], wait_until="domcontentloaded", timeout=60_000)
-            await _challenge(page, headless, "竞品详情页面")
-            detail = await _snapshot(page, base_url, item["asin"])
-            item["parent_asin"] = await _parent_asin(page)
-            item["brand"] = _clean_brand(await _text(page, ["#bylineInfo"])) or item.get("brand")
-            item["size"] = detail.get("size") or item.get("size")
-            for key in ("title", "price", "image"):
-                if detail.get(key):
-                    item[key] = detail[key]
-            if detail.get("images"):
-                item["images"] = detail["images"][:4]
-            if detail.get("rating") is not None:
-                item["rating"] = detail["rating"]
-            if detail.get("rating_count") is not None:
-                item["rating_count"] = detail["rating_count"]
-            if detail.get("recent_sales_signal"):
-                item["sales"] = detail["recent_sales_signal"]
-        except Exception:
-            # Search-card data remains useful when one detail page is blocked.
-            pass
+    if verify_detail_pages:
+        for item in eligible:
+            try:
+                await page.goto(item["url"], wait_until="domcontentloaded", timeout=60_000)
+                await _challenge(page, headless, "竞品详情页面")
+                detail = await _snapshot(page, base_url, item["asin"])
+                item["parent_asin"] = await _parent_asin(page)
+                item["brand"] = _clean_brand(await _text(page, ["#bylineInfo"])) or item.get("brand")
+                item["size"] = detail.get("size") or item.get("size")
+                for key in ("title", "price", "image"):
+                    if detail.get(key):
+                        item[key] = detail[key]
+                if detail.get("images"):
+                    item["images"] = detail["images"][:4]
+                if detail.get("rating") is not None:
+                    item["rating"] = detail["rating"]
+                if detail.get("rating_count") is not None:
+                    item["rating_count"] = detail["rating_count"]
+                if detail.get("recent_sales_signal"):
+                    item["sales"] = detail["recent_sales_signal"]
+            except Exception:
+                # Search-card data remains useful when one detail page is blocked.
+                pass
 
     target_image_urls = list(dict.fromkeys(target.get("images") or [target.get("image")]))[:4]
     all_image_urls = list(dict.fromkeys([
@@ -580,10 +580,8 @@ async def discover_competitors(
             overall_similarity=overall,
         ))
 
-    # One representative per brand + concrete size. This prevents a search page
-    # full of sibling or near-duplicate listings, while still allowing the same
-    # brand to appear for genuinely different sizes. If Amazon does not expose
-    # size, fall back to the verified parent family.
+    # Keep only one representative per competitor brand. If the brand cannot be
+    # inferred from the search title, fall back to parent/ASIN identity.
     candidates, final_collapsed = _dedupe_and_sort_candidates(candidates)
     collapsed_same_parent = preliminary_collapsed + final_collapsed
     # Public monthly-sales evidence is the primary ranking signal requested by
