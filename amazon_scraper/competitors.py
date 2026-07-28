@@ -610,7 +610,7 @@ async def discover_competitors(
             -item["preliminary_score"],
             item["asin"],
         ),
-    )[: min(max(limit + 6, 12), 60)]
+    )[: min(max(limit + 6, 12), 120)]
 
     if verify_detail_pages:
         # Detail verification is intentionally a shortlist operation. Search

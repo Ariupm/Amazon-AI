@@ -173,6 +173,7 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 .queryWeightRow label input{width:100%;border:0;outline:0;background:transparent}
 .queryWeightRow button,.addQueryRow{border:1px solid #d3dfd9;border-radius:7px;background:#fff;color:#426158;padding:7px}
 .weightedQueryEditor>small{color:#71817c}
+.candidateLimitToggle{display:flex;align-items:center;gap:8px;width:max-content;padding:9px 12px;border:1px solid #d5e2dc;border-radius:9px;background:#f7fbf9;color:#31594e;font-size:11px}
 @media(max-width:850px){.discoveryProfile{grid-template-columns:1fr}}
 @media(max-width:650px){.queryWeightHead{display:none}.queryWeightRow{grid-template-columns:36px 1fr 85px}.queryWeightRow>button{grid-column:2/-1}}
 .discoverActions{display:flex;align-items:flex-end;gap:9px}

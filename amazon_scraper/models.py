@@ -121,7 +121,7 @@ class CompetitorDiscoverRequest(BaseModel):
     target_name: str | None = Field(default=None, max_length=160)
     reference_image_data: str | None = Field(default=None, max_length=12_000_000)
     marketplace: Literal["US", "UK", "DE", "JP"] = "US"
-    limit: int = Field(default=24, ge=6, le=60)
+    limit: int = Field(default=24, ge=6, le=100)
     search_pages: int = Field(default=1, ge=1, le=3)
     verify_detail_pages: bool = False
     headless: bool = False
