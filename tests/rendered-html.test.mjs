@@ -67,6 +67,8 @@ test("title workspace starts from real inputs without fake competitors", async (
   const workspace = await readFile(new URL("../app/titles/market-workspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /待确认的本品画像/);
   assert.match(workspace, /确认搜索词/);
+  assert.match(workspace, /人工可手动赋予权重/);
+  assert.match(workspace, /search_query_weights/);
   assert.match(workspace, /确认方案并搜索竞品/);
   assert.match(workspace, /api\/competitors\/plan/);
   assert.match(workspace, /每个竞品品牌只保留 1 款/);
@@ -75,7 +77,7 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /同品牌重复项/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
-  assert.match(workspace, /confirmed-competitor-plan-v12/);
+  assert.match(workspace, /weighted-competitor-queries-v13/);
   assert.match(workspace, /verify_detail_pages/);
   assert.match(workspace, /旧版本机抓取器仍占用 8765 端口/);
   assert.match(workspace, /正在检查本机抓取器版本/);
@@ -104,7 +106,7 @@ test("renders child bullets with a product fallback", async () => {
 
 test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
-  assert.match(launcher, /confirmed-competitor-plan-v12/);
+  assert.match(launcher, /weighted-competitor-queries-v13/);
   assert.match(launcher, /检测到旧版抓取器/);
   assert.match(launcher, /netstat -ano/);
   assert.match(launcher, /Get-ListenerProcessId/);

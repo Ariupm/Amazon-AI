@@ -368,11 +368,13 @@ def _dedupe_and_sort_candidates(
         )
         current = representative_by_group.get(group_key)
         candidate_rank = (
+            candidate.search_weight_score,
             candidate.monthly_sales_estimate or 0,
             candidate.overall_similarity,
             candidate.image_similarity or 0,
         )
         current_rank = (
+            current.search_weight_score,
             current.monthly_sales_estimate or 0,
             current.overall_similarity,
             current.image_similarity or 0,
@@ -382,6 +384,7 @@ def _dedupe_and_sort_candidates(
     collapsed = len(candidates) - len(representative_by_group)
     representatives = list(representative_by_group.values())
     representatives.sort(key=lambda item: (
+        -item.search_weight_score,
         -(item.monthly_sales_estimate or 0),
         -item.overall_similarity,
         -(item.image_similarity or 0),
@@ -406,6 +409,7 @@ async def discover_competitors(
     product_type: str | None = None,
     direct_competitor_definition: str | None = None,
     excluded_terms: list[str] | None = None,
+    search_query_weights: dict[str, int] | None = None,
 ) -> CompetitorDiscoverResult:
     features = features or []
     base_url, _ = MARKETPLACES[marketplace]
@@ -435,6 +439,14 @@ async def discover_competitors(
         if 2 <= len(re.sub(r"\s+", " ", query).strip()) <= 120
     ]
     search_queries = list(dict.fromkeys(custom_queries))[:6] or generated_queries
+    supplied_weights = search_query_weights or {}
+    query_weights = {
+        query: max(0, min(100, int(supplied_weights.get(query, 1))))
+        for query in search_queries
+    }
+    if not any(query_weights.values()):
+        query_weights = {query: 1 for query in search_queries}
+    total_query_weight = sum(query_weights.values())
     confirmed_product_type = re.sub(r"\s+", " ", product_type or category or "").strip()
     family_name, family_words = _family(f"{confirmed_product_type} {target['title']}")
     normalized_exclusions = [
@@ -525,7 +537,48 @@ async def discover_competitors(
         )
         token_overlap = len(target_tokens & set(_tokens(item["title"]))) / max(1, len(target_tokens))
         item["preliminary_score"] = feature_coverage * .75 + token_overlap * .20 + min(len(item["queries"]), 3) / 3 * .05
+        item["search_weight_score"] = round(
+            sum(query_weights.get(query, 0) for query in item["queries"])
+            / total_query_weight * 100
+        )
         eligible.append(item)
+    # Allocate the broad candidate pool by the operator-confirmed weights.
+    # Each enabled query gets a proportional quota; duplicates count once and
+    # unused quota is filled by the strongest remaining candidates.
+    pool_cap = min(max(limit * 2, 24), 120)
+    weighted_pool: list[dict] = []
+    pooled_asins: set[str] = set()
+    for query in sorted(search_queries, key=lambda value: -query_weights[value]):
+        if query_weights[query] <= 0:
+            continue
+        quota = max(1, round(pool_cap * query_weights[query] / total_query_weight))
+        members = sorted(
+            (item for item in eligible if query in item["queries"]),
+            key=lambda item: (
+                -item["preliminary_score"],
+                -(_monthly_sales_estimate(item.get("sales")) or 0),
+                item["asin"],
+            ),
+        )
+        for item in members:
+            if item["asin"] in pooled_asins:
+                continue
+            weighted_pool.append(item)
+            pooled_asins.add(item["asin"])
+            if sum(query in value["queries"] for value in weighted_pool) >= quota:
+                break
+    for item in sorted(
+        eligible,
+        key=lambda value: (
+            -value["search_weight_score"], -value["preliminary_score"], value["asin"],
+        ),
+    ):
+        if len(weighted_pool) >= pool_cap:
+            break
+        if item["asin"] not in pooled_asins:
+            weighted_pool.append(item)
+            pooled_asins.add(item["asin"])
+    eligible = weighted_pool
     # Detail-page verification is required to know the real parent family.
     # Prioritize the strongest search matches and keep the browser workload bounded.
     eligible.sort(key=lambda item: (-item["preliminary_score"], item["asin"]))
@@ -535,11 +588,13 @@ async def discover_competitors(
         key = f"brand:{brand_key}" if brand_key else item["asin"]
         current = pregrouped.get(key)
         item_rank = (
+            item["search_weight_score"],
             _monthly_sales_estimate(item.get("sales")) or 0,
             item["preliminary_score"],
             len(item["queries"]),
         )
         current_rank = (
+            current["search_weight_score"],
             _monthly_sales_estimate(current.get("sales")) or 0,
             current["preliminary_score"],
             len(current["queries"]),
@@ -550,6 +605,7 @@ async def discover_competitors(
     eligible = sorted(
         pregrouped.values(),
         key=lambda item: (
+            -item["search_weight_score"],
             -(_monthly_sales_estimate(item.get("sales")) or 0),
             -item["preliminary_score"],
             item["asin"],
@@ -663,7 +719,8 @@ async def discover_competitors(
             image_similarity=image_score, visual_images_compared=compared_pairs,
             visual_reason=visual_reason, attribute_similarity=attr_score,
             market_similarity=market_score, market_value=market_score,
-            product_type_similarity=product_type_score, category_match=True,
+            product_type_similarity=product_type_score,
+            search_weight_score=item["search_weight_score"], category_match=True,
             auto_selected=overall >= 60, match_reasons=reasons,
             overall_similarity=overall,
         ))

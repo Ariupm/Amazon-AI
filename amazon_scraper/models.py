@@ -132,6 +132,7 @@ class CompetitorDiscoverRequest(BaseModel):
     brand: str | None = None
     features: list[str] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list, max_length=6)
+    search_query_weights: dict[str, int] = Field(default_factory=dict)
     product_type: str | None = Field(default=None, max_length=120)
     direct_competitor_definition: str | None = Field(default=None, max_length=500)
     excluded_terms: list[str] = Field(default_factory=list, max_length=30)
@@ -181,6 +182,7 @@ class CompetitorCandidate(BaseModel):
     market_similarity: int = 0
     market_value: int = 0
     product_type_similarity: int = 0
+    search_weight_score: int = 0
     category_match: bool = False
     auto_selected: bool = False
     match_reasons: list[str] = Field(default_factory=list)
@@ -226,6 +228,9 @@ class CompetitorExportItem(BaseModel):
     visual_images_compared: int = 0
     visual_reason: str | None = None
     market_similarity: int | None = None
+    market_value: int | None = None
+    product_type_similarity: int | None = None
+    search_weight_score: int | None = None
     match_reasons: list[str] = Field(default_factory=list)
 
 

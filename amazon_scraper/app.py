@@ -21,8 +21,8 @@ from .keyword_files import inspect_keyword_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 from .title_generator import generate_titles
 
-FEATURE_VERSION = "confirmed-competitor-plan-v12"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.12.0")
+FEATURE_VERSION = "weighted-competitor-queries-v13"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.13.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -136,6 +136,7 @@ async def competitor_discovery(request: CompetitorDiscoverRequest) -> Competitor
                     request.target_name, request.reference_image_data,
                     request.verify_detail_pages, request.product_type,
                     request.direct_competitor_definition, request.excluded_terms,
+                    request.search_query_weights,
                 )
             except ScrapeError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
