@@ -20,8 +20,8 @@ from .keyword_files import inspect_keyword_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 from .title_generator import generate_titles
 
-FEATURE_VERSION = "search-first-brand-dedupe-v10"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.10.0")
+FEATURE_VERSION = "search-first-brand-dedupe-v11"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.11.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

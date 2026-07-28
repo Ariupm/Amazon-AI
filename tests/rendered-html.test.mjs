@@ -58,8 +58,9 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(html, /主标题 ≤ 75 \+ Highlight Item ≤ 125/);
   assert.doesNotMatch(html, /新增变体计划表|卖家 SKU|库存计划/);
   assert.match(html, /自动发现疑似竞品/);
-  assert.match(html, /类目不一致直接排除/);
-  assert.match(html, /真实属性 35%/);
+  assert.match(html, /识别到类目族时排除跨类目商品/);
+  assert.match(html, /标题关键词 40%/);
+  assert.match(html, /真实属性 30%/);
   assert.match(html, /尺寸不进入系统搜索词/);
   assert.match(html, /视觉 20%/);
   assert.match(html, /Amazon 翻页/);
@@ -73,7 +74,7 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /同品牌重复项/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
-  assert.match(workspace, /search-first-brand-dedupe-v10/);
+  assert.match(workspace, /search-first-brand-dedupe-v11/);
   assert.match(workspace, /verify_detail_pages/);
   assert.match(workspace, /旧版本机抓取器仍占用 8765 端口/);
   assert.match(workspace, /正在检查本机抓取器版本/);
@@ -102,7 +103,7 @@ test("renders child bullets with a product fallback", async () => {
 
 test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
-  assert.match(launcher, /search-first-brand-dedupe-v10/);
+  assert.match(launcher, /search-first-brand-dedupe-v11/);
   assert.match(launcher, /检测到旧版抓取器/);
   assert.match(launcher, /netstat -ano/);
   assert.match(launcher, /Get-ListenerProcessId/);

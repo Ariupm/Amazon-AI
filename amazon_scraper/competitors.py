@@ -548,7 +548,7 @@ async def discover_competitors(
         compared_pairs = len(pair_scores)
         rating_count = item.get("rating_count") or _number(item["rating_count_text"])
         market_score = _market_score(target_price, _price(item["price"]), rating_count, item["sales"])
-        overall = round((image_score or 0) * .20 + attr_score * .35 + text_score * .30 + market_score * .15)
+        overall = round((image_score or 0) * .20 + attr_score * .30 + text_score * .40 + market_score * .10)
         reasons = []
         if family_name:
             reasons.append(f"同类目：{family_name}")
