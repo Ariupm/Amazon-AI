@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "style-title-v18";
+const REQUIRED_BACKEND = "dual-keyword-pools-v19";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
@@ -56,6 +56,11 @@ type SizeScenario = {
 type CompetitorTitleAnalysis = {
   sample_size: number; common_openings: string[]; common_features: string[];
   recommended_structure: string; consumer_note: string;
+};
+type CompetitorTermAnalysis = {
+  term: string; document_frequency: number; weighted_frequency: number;
+  coverage_percent: number; matched_facts: string[];
+  recommended_placement: "main" | "highlight" | "reference";
 };
 type SearchPlan = {
   productType: string; directDefinition: string; excludedTerms: string;
@@ -114,6 +119,7 @@ export default function MarketWorkspace() {
   const [negativeSummary, setNegativeSummary] = useState<{valid:boolean;rows:number} | null>(null);
   const [sizeScenarios, setSizeScenarios] = useState<SizeScenario[]>([]);
   const [competitorTitleAnalysis, setCompetitorTitleAnalysis] = useState<CompetitorTitleAnalysis | null>(null);
+  const [competitorTerms, setCompetitorTerms] = useState<CompetitorTermAnalysis[]>([]);
   const [painInsights, setPainInsights] = useState<PainInsight[]>([]);
   const [reviewCompetitorLimit, setReviewCompetitorLimit] = useState(10);
   const candidatePageSize = 10;
@@ -257,6 +263,7 @@ export default function MarketWorkspace() {
     setKeywordPlanMessage("");
     setSizeScenarios([]);
     setCompetitorTitleAnalysis(null);
+    setCompetitorTerms([]);
     setPainInsights([]);
   }
 
@@ -670,6 +677,7 @@ export default function MarketWorkspace() {
       setTrafficKeywords(result.traffic_keywords || []);
       setSizeScenarios(result.size_scenarios || []);
       setCompetitorTitleAnalysis(result.competitor_analysis || null);
+      setCompetitorTerms(result.competitor_terms || []);
       setGeneratedTitles([]);
       setKeywordPlanMessage(`✓ 已重新分析 ${analysis.length} 个高相关词；风格匹配词优先建议进入主标题。`);
       setMessage(`已筛出 ${analysis.length} 个高相关流量词。请人工确认位置，再生成标题。`);
@@ -699,6 +707,7 @@ export default function MarketWorkspace() {
       setKeywordAnalysis(result.keyword_analysis || []);
       setSizeScenarios(result.size_scenarios || []);
       setCompetitorTitleAnalysis(result.competitor_analysis || null);
+      setCompetitorTerms(result.competitor_terms || []);
       setMessage(`已生成 ${result.candidates?.length || 0} 个真实标题候选，请逐条编辑和人工确认。`);
       setTimeout(() => document.getElementById("generated-titles")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (error) {
@@ -803,8 +812,9 @@ export default function MarketWorkspace() {
               <div><span>竞品高频真实卖点</span><b>{competitorTitleAnalysis.common_features.join(" · ") || "未识别到稳定共性"}</b></div>
               <div className="wideStudy"><span>建议英文结构</span><b>{competitorTitleAnalysis.recommended_structure}</b><small>{competitorTitleAnalysis.consumer_note}</small></div>
             </div>}
+            {!!competitorTerms.length && <div className="competitorTermStudy"><div className="dualPoolHead"><div><span>词池 A · MARKET LANGUAGE</span><h4>头部竞品高频表达</h4><p>按不同竞品标题的出现覆盖率统计；前10个头部竞品获得更高权重。</p></div><em>{competitorTerms.length} 个市场表达</em></div><div className="competitorTermGrid">{competitorTerms.slice(0, 12).map(item => <article key={item.term}><div><b>{item.term}</b><span>{item.coverage_percent}% 竞品覆盖</span></div><small>{item.matched_facts.length ? `匹配本品：${item.matched_facts.join("、")}` : "仅作市场结构参考"} · {item.recommended_placement === "main" ? "建议主标题" : item.recommended_placement === "highlight" ? "建议 Highlight" : "结构参考"}</small></article>)}</div></div>}
             {!!sizeScenarios.length && <div className="scenarioStudy"><h4>不同尺寸的市场场景判断</h4>{sizeScenarios.map(item => <article key={item.size || item.product_type}><div><b>{item.size || "当前尺寸"}</b><span>{item.product_type}</span></div><p>主场景：{item.primary_scenes.join(" / ")}</p><p>辅助场景：{item.secondary_scenes.join(" / ")}</p><small>{item.reasoning}</small></article>)}</div>}
-            <div className="keywordStudy"><div className="keywordStudyHead"><div><h4>最新候选词与排名</h4><p>排名＝上传ABA词库最新月份的搜索量排名，不是 Amazon 自然位；只保留与本品、尺寸和场景一致的词。</p></div><span>{keywordAnalysis[0]?.month ? `最新字段：${keywordAnalysis[0].month}` : "词库未提供月份字段"}</span></div>
+            <div className="keywordStudy"><div className="keywordStudyHead"><div><span className="poolLabel">词池 B · SEARCH DEMAND</span><h4>ABA 搜索词与流量排名</h4><p>排名＝上传ABA词库最新月份的搜索量排名，不是 Amazon 自然位；只保留与本品、尺寸和场景一致的词。</p></div><span>{keywordAnalysis[0]?.month ? `最新字段：${keywordAnalysis[0].month}` : "词库未提供月份字段"}</span></div>
               <div className="keywordTable"><div className="keywordRow keywordHeader"><span>词库排名</span><span>候选关键词</span><span>最新搜索量</span><span>综合分</span><span>人工指定位置</span><span>判断</span></div>{keywordAnalysis.map(item => {
                 const selection = keywordSelections.find(value => value.term === item.term);
                 return <div className="keywordRow" key={item.term}><span>{item.rank ? `#${item.rank}` : "—"}</span><b>{item.term}</b><span>{item.volume?.toLocaleString() || "—"}</span><span>{item.total_score}分</span><select value={selection?.placement || item.recommended_placement} onChange={event => setKeywordSelections(current => current.map(value => value.term === item.term ? {...value, placement:event.target.value as KeywordPlacement, enabled:event.target.value !== "exclude"} : value))}><option value="main">主标题</option><option value="highlight">Item Highlight</option><option value="ads">广告词包</option><option value="exclude">不采用</option></select><small>{item.reason}</small></div>;

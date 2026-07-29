@@ -6,7 +6,7 @@ $webPort = 3000
 $healthUrl = "http://127.0.0.1:$port/health"
 $openApiUrl = "http://127.0.0.1:$port/openapi.json"
 $pageUrl = "http://localhost:$webPort/titles"
-$requiredFeatureVersion = "style-title-v18"
+$requiredFeatureVersion = "dual-keyword-pools-v19"
 
 function Get-ListenerProcessId {
     $connection = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |

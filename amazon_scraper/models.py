@@ -341,10 +341,20 @@ class CompetitorTitleAnalysis(BaseModel):
     consumer_note: str
 
 
+class CompetitorTermAnalysis(BaseModel):
+    term: str
+    document_frequency: int
+    weighted_frequency: int
+    coverage_percent: int
+    matched_facts: list[str] = Field(default_factory=list)
+    recommended_placement: Literal["main", "highlight", "reference"] = "reference"
+
+
 class TitleGenerateResult(BaseModel):
     candidates: list[TitleCandidate]
     traffic_keywords: list[KeywordEntry] = Field(default_factory=list)
     keyword_analysis: list[TitleKeywordAnalysis] = Field(default_factory=list)
     size_scenarios: list[SizeScenarioAnalysis] = Field(default_factory=list)
     competitor_analysis: CompetitorTitleAnalysis
+    competitor_terms: list[CompetitorTermAnalysis] = Field(default_factory=list)
     rules: list[str] = Field(default_factory=list)

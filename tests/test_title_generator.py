@@ -121,6 +121,26 @@ class TitleGeneratorTests(unittest.TestCase):
         boho = next(item for item in result.keyword_analysis if item.term == "boho runner rug")
         self.assertEqual(boho.recommended_placement, "main")
 
+    def test_competitor_terms_are_analyzed_separately_from_aba_terms(self):
+        result = generate_titles(TitleGenerateRequest(
+            brand="GENIMO",
+            product_title="GENIMO Washable Boho Runner Rug",
+            competitor_titles=[
+                "BrandA Washable Boho Runner Rug Non Slip",
+                "BrandB Boho Runner Rug Washable Low Pile",
+                "BrandC Vintage Boho Runner Rug for Hallway",
+            ],
+            keywords=[KeywordEntry(term="runner rugs", volume=90000)],
+            category="Runner Rug",
+            style="Boho, Vintage",
+            must_have=["Washable", "Non-Slip", "Low Pile"],
+            sizes=["2' x 6'"],
+        ))
+        self.assertEqual(result.keyword_analysis[0].term, "runner rugs")
+        self.assertTrue(result.competitor_terms)
+        self.assertTrue(any("boho runner rug" in item.term for item in result.competitor_terms))
+        self.assertTrue(any(item.coverage_percent == 100 for item in result.competitor_terms))
+
 
 if __name__ == "__main__":
     unittest.main()

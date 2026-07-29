@@ -5,6 +5,7 @@ import re
 from collections import Counter
 
 from .models import (
+    CompetitorTermAnalysis,
     CompetitorTitleAnalysis,
     KeywordEntry,
     SizeScenarioAnalysis,
@@ -155,6 +156,7 @@ def _keyword_analysis(
     request: TitleGenerateRequest,
     scenarios: list[SizeScenarioAnalysis],
     features: list[str],
+    competitor_terms: list[CompetitorTermAnalysis],
 ) -> list[TitleKeywordAnalysis]:
     reference = _tokens(" ".join([
         request.product_title, *request.bullets, request.category or "",
@@ -224,7 +226,12 @@ def _keyword_analysis(
         placement = "main" if category_match or style_match or (scene_match and volume_score >= 60) else "highlight" if feature_match or scene_match else "ads"
         cluster_tokens = sorted(_tokens(term))
         cluster = " ".join(cluster_tokens[:5])
-        score = total_score
+        term_tokens = _tokens(term)
+        market_support = max(
+            (candidate.coverage_percent for candidate in competitor_terms if len(term_tokens & _tokens(candidate.term)) >= min(2, len(term_tokens))),
+            default=0,
+        )
+        score = total_score + market_support * .08
         ranked.append((score, TitleKeywordAnalysis(
             term=term, volume=item.volume, month=item.month, rank=item.rank,
             relevance=relevance, role=role, reason=reason, cluster=cluster,
@@ -240,6 +247,64 @@ def _keyword_analysis(
             continue
         seen_clusters.append(tokens)
         result.append(item)
+        if len(result) >= 20:
+            break
+    return result
+
+
+def _competitor_terms(request: TitleGenerateRequest, features: list[str]) -> list[CompetitorTermAnalysis]:
+    titles = [re.sub(r"\s+", " ", value).strip() for value in request.competitor_titles if value.strip()]
+    if not titles:
+        return []
+    fact_groups = {
+        "类目": request.category or "",
+        "材质": request.material or "",
+        "风格": request.style or "",
+        "场景": request.use_case or "",
+        "卖点": " ".join([*request.must_have, *request.verified_improvements, *features]),
+    }
+    fact_tokens = {name: _tokens(value) for name, value in fact_groups.items() if value}
+    documents: list[list[str]] = []
+    for title in titles:
+        without_brand = re.sub(r"^\S+\s+", "", title.lower())
+        without_sizes = re.sub(r"\b\d+(?:\.\d+)?\s*(?:x|×|'|ft|inch|inches)\s*\d*(?:\.\d+)?\b", " ", without_brand)
+        documents.append(re.findall(r"[a-z][a-z'-]*", without_sizes))
+    phrase_documents: dict[str, set[int]] = {}
+    for document_index, words in enumerate(documents):
+        seen_in_document: set[str] = set()
+        for size in (2, 3, 4):
+            for index in range(len(words) - size + 1):
+                phrase_words = words[index:index + size]
+                meaningful = [word for word in phrase_words if word not in STOPWORDS]
+                if len(meaningful) < 2 or phrase_words[0] in {"and", "with", "for", "the"}:
+                    continue
+                phrase = " ".join(phrase_words)
+                if phrase in seen_in_document:
+                    continue
+                seen_in_document.add(phrase)
+                phrase_documents.setdefault(phrase, set()).add(document_index)
+    minimum = 1 if len(titles) < 3 else 2
+    ranked: list[tuple[int, int, str, list[str]]] = []
+    for phrase, document_ids in phrase_documents.items():
+        if len(document_ids) < minimum:
+            continue
+        phrase_tokens = _tokens(phrase)
+        matched = [name for name, tokens in fact_tokens.items() if phrase_tokens & tokens]
+        if not matched and not re.search(r"\b(?:rug|rugs|runner|carpet)\b", phrase):
+            continue
+        weighted = sum(3 if index < 10 else 2 if index < 20 else 1 for index in document_ids)
+        ranked.append((weighted, len(document_ids), phrase, matched))
+    ranked.sort(key=lambda item: (-item[0], -item[1], -len(item[2]), item[2]))
+    result: list[CompetitorTermAnalysis] = []
+    for weighted, frequency, phrase, matched in ranked:
+        if any(phrase in item.term and frequency == item.document_frequency for item in result):
+            continue
+        placement = "main" if any(name in matched for name in ("类目", "风格")) else "highlight" if matched else "reference"
+        result.append(CompetitorTermAnalysis(
+            term=phrase, document_frequency=frequency, weighted_frequency=weighted,
+            coverage_percent=round(frequency * 100 / len(titles)),
+            matched_facts=matched, recommended_placement=placement,
+        ))
         if len(result) >= 20:
             break
     return result
@@ -336,7 +401,8 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
     colors: list[str | None] = request.colors or [None]
     sizes: list[str | None] = request.sizes or [_extract_size(request.product_title)]
     scenarios = [_scenario(size, request.category) for size in sizes]
-    keyword_analysis = _keyword_analysis(request, scenarios, features)
+    competitor_terms = _competitor_terms(request, features)
+    keyword_analysis = _keyword_analysis(request, scenarios, features, competitor_terms)
     selected_keywords = _selected_keywords(request, keyword_analysis)
     traffic = [
         KeywordEntry(term=item.term, volume=item.volume, month=item.month, rank=item.rank)
@@ -443,6 +509,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
         keyword_analysis=keyword_analysis,
         size_scenarios=scenarios,
         competitor_analysis=competitor_analysis,
+        competitor_terms=competitor_terms,
         rules=[
             "主标题前部必须出现与尺寸一致的类目大词，让消费者立即识别商品类型",
             "词库排名为上传文件最新月份的搜索量排名，不代表 Amazon 自然搜索排名",
