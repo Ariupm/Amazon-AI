@@ -140,6 +140,89 @@ export default function MarketWorkspace() {
     return "";
   }
 
+  function extractLabels(corpus: string, rules: { pattern: RegExp; label: string }[]) {
+    const matches = rules.flatMap(rule => {
+      const match = rule.pattern.exec(corpus);
+      rule.pattern.lastIndex = 0;
+      return match ? [{ label: rule.label, index: match.index }] : [];
+    });
+    return [...new Map(matches.sort((a, b) => a.index - b.index).map(item => [item.label, item])).values()]
+      .map(item => item.label);
+  }
+
+  function inferProductFacts(title: string, bullets: string[]) {
+    const corpus = [title, ...bullets].join(" ").replace(/[|/]/g, " ");
+    const material = extractLabels(corpus, [
+      { pattern: /\bfaux wool\b/i, label: "Faux Wool" },
+      { pattern: /\bpolyester\b/i, label: "Polyester" },
+      { pattern: /\bpolypropylene\b/i, label: "Polypropylene" },
+      { pattern: /\bnylon\b/i, label: "Nylon" },
+      { pattern: /\bcotton\b/i, label: "Cotton" },
+      { pattern: /\bwool\b/i, label: "Wool" },
+      { pattern: /\bjute\b/i, label: "Jute" },
+      { pattern: /\bchenille\b/i, label: "Chenille" },
+      { pattern: /\bmicrofiber\b/i, label: "Microfiber" },
+      { pattern: /\bviscose\b/i, label: "Viscose" },
+      { pattern: /\bacrylic\b/i, label: "Acrylic" },
+    ]).filter((label, index, items) => label !== "Wool" || !items.includes("Faux Wool"));
+    const style = extractLabels(corpus, [
+      { pattern: /\bboho\b/i, label: "Boho" },
+      { pattern: /\bvintage\b/i, label: "Vintage" },
+      { pattern: /\bdistressed\b/i, label: "Distressed" },
+      { pattern: /\bmodern\b/i, label: "Modern" },
+      { pattern: /\btraditional\b/i, label: "Traditional" },
+      { pattern: /\bfarmhouse\b/i, label: "Farmhouse" },
+      { pattern: /\bmoroccan\b/i, label: "Moroccan" },
+      { pattern: /\bpersian\b/i, label: "Persian" },
+      { pattern: /\boriental\b/i, label: "Oriental" },
+      { pattern: /\babstract\b/i, label: "Abstract" },
+      { pattern: /\bgeometric\b/i, label: "Geometric" },
+      { pattern: /\bfloral\b/i, label: "Floral" },
+      { pattern: /\btribal\b/i, label: "Tribal" },
+      { pattern: /\bminimalist\b/i, label: "Minimalist" },
+      { pattern: /\bcontemporary\b/i, label: "Contemporary" },
+    ]);
+    const useCases = extractLabels(corpus, [
+      { pattern: /\bliving room\b/i, label: "Living Room" },
+      { pattern: /\bbedroom\b/i, label: "Bedroom" },
+      { pattern: /\bdining room\b/i, label: "Dining Room" },
+      { pattern: /\bkitchen\b/i, label: "Kitchen" },
+      { pattern: /\bhallway\b/i, label: "Hallway" },
+      { pattern: /\b(?:entryway|entrance)\b/i, label: "Entryway" },
+      { pattern: /\blaundry(?: room)?\b/i, label: "Laundry Room" },
+      { pattern: /\bbathroom\b/i, label: "Bathroom" },
+      { pattern: /\bnursery\b/i, label: "Nursery" },
+      { pattern: /\bhome office\b/i, label: "Home Office" },
+    ]);
+    const features = extractLabels(corpus, [
+      { pattern: /\bmachine washable\b/i, label: "Machine Washable" },
+      { pattern: /\bwashable\b/i, label: "Washable" },
+      { pattern: /\bnon[- ]?slip\b/i, label: "Non-Slip" },
+      { pattern: /\bstain[- ]?resistant\b/i, label: "Stain-Resistant" },
+      { pattern: /\blow pile\b/i, label: "Low Pile" },
+      { pattern: /\bhigh[- ]?low pile\b/i, label: "High-Low Pile" },
+      { pattern: /\bsoft\b/i, label: "Soft" },
+      { pattern: /\bnon[- ]?shedding\b/i, label: "Non-Shedding" },
+      { pattern: /\bfade[- ]?resistant\b/i, label: "Fade-Resistant" },
+      { pattern: /\bwaterproof\b/i, label: "Waterproof" },
+      { pattern: /\breversible\b/i, label: "Reversible" },
+      { pattern: /\brubber backing\b/i, label: "Rubber Backing" },
+      { pattern: /\bTPR backing\b/i, label: "TPR Backing" },
+      { pattern: /\btextured\b/i, label: "Textured" },
+      { pattern: /\btufted\b/i, label: "Tufted" },
+    ]).filter((label, index, items) =>
+      (label !== "Washable" || !items.includes("Machine Washable"))
+      && (label !== "Low Pile" || !items.includes("High-Low Pile"))
+    );
+    return {
+      category: inferCategory(title),
+      material: material.join(", "),
+      style: style.join(", "),
+      useCase: useCases.join(", "),
+      mustHave: features.join(", "),
+    };
+  }
+
   function errorDetail(value: unknown, fallback: string) {
     if (typeof value === "string" && value.trim()) return value;
     if (Array.isArray(value)) {
@@ -204,14 +287,22 @@ export default function MarketWorkspace() {
       const batch = await response.json();
       if (!response.ok || !batch.items?.[0]?.success) throw new Error(batch.detail || batch.items?.[0]?.error || "读取失败");
       const loadedProduct = batch.items[0].result as Product;
+      const inferred = inferProductFacts(loadedProduct.title, loadedProduct.bullets || []);
       setProduct(loadedProduct);
       setFacts(current => ({
         ...current,
         brand: current.brand || loadedProduct.brand || "",
-        category: current.category || inferCategory(loadedProduct.title),
+        category: current.category || inferred.category,
+        material: current.material || inferred.material,
+        style: current.style || inferred.style,
+        useCase: current.useCase || inferred.useCase,
+        mustHave: current.mustHave || inferred.mustHave,
       }));
       resetDiscovery();
-      setSourceMessage(taskMode === "new-variant" ? `父体读取完成：已取得 ${batch.items[0].result.variants?.length || 0} 个现有子体，后续竞品搜索会全部排除。` : "该子体资料已读取。请确认商品事实，再发现竞品。");
+      const inferredCount = [inferred.category, inferred.material, inferred.style, inferred.useCase, inferred.mustHave].filter(Boolean).length;
+      setSourceMessage(taskMode === "new-variant"
+        ? `父体读取完成：已取得 ${batch.items[0].result.variants?.length || 0} 个现有子体，后续竞品搜索会全部排除。已从标题和五点回填 ${inferredCount} 组商品事实，请人工确认。`
+        : `该子体资料已读取，并从标题和五点回填 ${inferredCount} 组商品事实。请确认后再发现竞品。`);
     } catch (error) {
       setSourceMessage(error instanceof TypeError ? "未连接到本机抓取器。请双击当前项目中的“启动真实抓取器.bat”，看到“最新版真实抓取器已启动”后再试。" : error instanceof Error ? error.message : "读取失败");
     } finally { setLoading(""); }
