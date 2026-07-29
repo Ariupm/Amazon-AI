@@ -3,7 +3,7 @@ import unittest
 
 from openpyxl import Workbook
 
-from amazon_scraper.keyword_files import inspect_keyword_file
+from amazon_scraper.keyword_files import inspect_keyword_file, inspect_negative_file
 
 
 class KeywordFileTests(unittest.TestCase):
@@ -38,6 +38,11 @@ class KeywordFileTests(unittest.TestCase):
 
         self.assertFalse(result.valid)
         self.assertTrue(result.warnings)
+
+    def test_reads_and_deduplicates_negative_text_file(self):
+        result = inspect_negative_file("negative.txt", "否词\nOutdoor\noutdoor\nBath Mat".encode())
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["terms"], ["Outdoor", "Bath Mat"])
 
     def test_uses_latest_month_instead_of_highest_historical_volume(self):
         workbook = Workbook()

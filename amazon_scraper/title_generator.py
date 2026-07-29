@@ -44,6 +44,11 @@ IRRELEVANT_RUG_TERMS = {
     "cleaner", "machine cleaner", "vacuum", "tape", "gripper", "pad", "pads",
     "shampoo", "repair", "outdoor", "door mat", "bath mat",
 }
+LOW_VALUE_CONNECTORS = {"with", "and", "for"}
+SCENE_WORDS = {
+    "living room", "bedroom", "dining room", "kitchen", "hallway",
+    "entryway", "nursery", "home office", "bathroom", "laundry room",
+}
 
 
 def _tokens(value: str) -> set[str]:
@@ -139,6 +144,10 @@ def _features(request: TitleGenerateRequest) -> list[str]:
         -competitor_corpus.count(label.lower().replace("-", " ")),
         original_order[label],
     ))
+    for improvement in request.verified_improvements:
+        label = re.sub(r"\s+", " ", improvement).strip(" ,|-")
+        if label and label.lower() not in {item.lower() for item in found}:
+            found.append(label)
     return found
 
 
@@ -158,6 +167,11 @@ def _keyword_analysis(
         for scene in [*scenario.primary_scenes, *scenario.secondary_scenes]
     }
     product_types = " ".join(scenario.product_type for scenario in scenarios).lower()
+    negatives = {
+        re.sub(r"\s+", " ", term).strip().lower()
+        for term in request.negative_terms if term.strip()
+    }
+    max_volume = max((item.volume or 0 for item in request.keywords), default=0)
     ranked: list[tuple[float, TitleKeywordAnalysis]] = []
     for item in request.keywords:
         term = re.sub(r"\s+", " ", item.term).strip()
@@ -165,6 +179,8 @@ def _keyword_analysis(
         if not term or len(term) > 80 or not re.search(r"\b(rug|rugs|carpet)\b", lower):
             continue
         if any(blocked in lower for blocked in IRRELEVANT_RUG_TERMS):
+            continue
+        if any(re.search(rf"\b{re.escape(blocked)}\b", lower) for blocked in negatives):
             continue
         if re.search(r"\b\d+\s*[x×]\s*\d+\b", lower):
             continue
@@ -178,8 +194,8 @@ def _keyword_analysis(
         category_match = bool(re.search(r"\b(area rug|area rugs|runner rug|runner rugs|accent rug|accent rugs)\b", lower))
         scene_match = any(scene in lower for scene in allowed_scenes)
         feature_match = any(feature.lower().replace("-", " ") in lower.replace("-", " ") for feature in features)
-        relevance = min(100, 45 + overlap * 12 + category_match * 18 + scene_match * 12 + feature_match * 15)
-        if relevance < 57:
+        relevance = min(100, 45 + overlap * 13 + category_match * 35 + scene_match * 12 + feature_match * 17)
+        if relevance < 80:
             continue
         if category_match:
             role = "主标题类目词"
@@ -193,19 +209,31 @@ def _keyword_analysis(
         else:
             role = "辅助流量词"
             reason = "与本品相关，但应以自然表达为先，不强行重复埋词。"
-        score = relevance * 2 + math.log10((item.volume or 0) + 1) * 8
+        purchase_intent = min(100, 45 + category_match * 25 + feature_match * 20 + scene_match * 10)
+        click_value = min(100, 35 + feature_match * 35 + scene_match * 20 + category_match * 10)
+        volume_score = round(100 * math.log1p(item.volume or 0) / math.log1p(max_volume)) if max_volume else 0
+        total_score = round(
+            relevance * .40 + volume_score * .30 + purchase_intent * .15
+            + click_value * .10 + min(100, purchase_intent + 10) * .05
+        )
+        placement = "main" if category_match or (scene_match and volume_score >= 60) else "highlight" if feature_match or scene_match else "ads"
+        cluster_tokens = sorted(_tokens(term))
+        cluster = " ".join(cluster_tokens[:5])
+        score = total_score
         ranked.append((score, TitleKeywordAnalysis(
             term=term, volume=item.volume, month=item.month, rank=item.rank,
-            relevance=relevance, role=role, reason=reason,
+            relevance=relevance, role=role, reason=reason, cluster=cluster,
+            recommended_placement=placement, purchase_intent=purchase_intent,
+            click_value=click_value, total_score=total_score,
         )))
     ranked.sort(key=lambda pair: (-pair[0], pair[1].rank or 10**9, pair[1].term.lower()))
     result: list[TitleKeywordAnalysis] = []
-    seen: set[str] = set()
+    seen_clusters: list[set[str]] = []
     for _, item in ranked:
-        normalized = re.sub(r"[^a-z]", "", item.term.lower())
-        if normalized in seen:
+        tokens = _tokens(item.term)
+        if any(len(tokens & seen) / max(1, min(len(tokens), len(seen))) >= .8 for seen in seen_clusters):
             continue
-        seen.add(normalized)
+        seen_clusters.append(tokens)
         result.append(item)
         if len(result) >= 20:
             break
@@ -225,12 +253,19 @@ def _competitor_analysis(request: TitleGenerateRequest, features: list[str]) -> 
         feature for feature in features
         if competitor_text.count(feature.lower().replace("-", " ")) > 0
     ][:6]
+    head_titles = titles[: min(10, len(titles))]
+    early_category = sum(bool(re.search(r"\b(?:area|runner|accent)\s+rugs?\b", " ".join(title.split()[:8]), re.I)) for title in head_titles)
+    structure = (
+        "Brand + high-traffic category/scene phrase + strongest differentiator + style + size/color."
+        if early_category >= max(1, len(head_titles) / 2)
+        else "Brand + strongest differentiator + high-traffic category/scene phrase + size/color."
+    )
     return CompetitorTitleAnalysis(
         sample_size=len(titles),
         common_openings=[phrase for phrase, _ in opening_counter.most_common(5)],
         common_features=common_features,
-        recommended_structure="Brand + clear category noun + strongest verified differentiator + size/color; then a readable benefit-and-use sentence.",
-        consumer_note="美国消费者应能在标题前半段立即确认商品类型、规格和主要差异；关键词服务于理解与广告相关性，而不是堆叠同义词。",
+        recommended_structure=structure,
+        consumer_note="前10个已锁定竞品视为头部样本，优先学习类目词位置和信息顺序；不复制品牌、虚假属性或连接词堆叠。",
     )
 
 
@@ -246,27 +281,39 @@ def _join_main(parts: list[str | None], limit: int) -> str:
     return result
 
 
-def _natural_highlight(features: list[str], scenario: SizeScenarioAnalysis, limit: int = 125) -> str:
-    normalized = [feature.lower() for feature in features]
-    benefit_parts: list[str] = []
-    if "soft" in normalized or "plush" in normalized:
-        benefit_parts.append("soft underfoot")
-    if "machine washable" in normalized or "washable" in normalized:
-        benefit_parts.append("easy to machine wash")
-    if "non-slip" in normalized:
-        benefit_parts.append("designed with non-slip backing")
-    if "stain-resistant" in normalized:
-        benefit_parts.append("stain-resistant")
-    pattern = next((feature for feature in features if any(
-        word in feature.lower() for word in ("arch", "wave", "geometric", "abstract", "textured")
-    )), None)
-    lead = f"A {pattern.lower()} design" if pattern else "A versatile design"
-    benefits = ", ".join(benefit_parts[:2])
-    scenes = " and ".join(scene.lower() for scene in scenario.primary_scenes[:2])
-    sentence = f"{lead} that is {benefits}, ideal for {scenes}." if benefits else f"{lead} for {scenes}."
-    if len(sentence) <= limit:
-        return sentence
-    return f"{lead} for {scenes}."[:limit].rstrip(" ,") + "."
+def _display_phrase(value: str) -> str:
+    small = {"a", "an", "the", "and", "or", "for", "of", "in", "to"}
+    words = value.replace(" rugs", " Rugs").replace(" rug", " Rug").split()
+    return " ".join(word.lower() if index and word.lower() in small else word.capitalize() for index, word in enumerate(words))
+
+
+def _compact_highlight(parts: list[str], limit: int = 125) -> str:
+    result = ""
+    for raw in parts:
+        part = re.sub(r"\s+", " ", raw).strip(" ,.|-")
+        if not part or part.lower() in result.lower():
+            continue
+        proposed = f"{result}, {part}" if result else part
+        if len(proposed) <= limit:
+            result = proposed
+    return result
+
+
+def _selected_keywords(
+    request: TitleGenerateRequest,
+    analysis: list[TitleKeywordAnalysis],
+) -> dict[str, list[TitleKeywordAnalysis]]:
+    by_term = {item.term.lower(): item for item in analysis}
+    result: dict[str, list[TitleKeywordAnalysis]] = {"main": [], "highlight": [], "ads": []}
+    if request.keyword_selections:
+        for selected in request.keyword_selections:
+            item = by_term.get(selected.term.lower())
+            if selected.enabled and item and selected.placement in result:
+                result[selected.placement].append(item)
+    else:
+        for item in analysis:
+            result[item.recommended_placement].append(item)
+    return result
 
 
 def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
@@ -276,6 +323,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
     sizes: list[str | None] = request.sizes or [_extract_size(request.product_title)]
     scenarios = [_scenario(size, request.category) for size in sizes]
     keyword_analysis = _keyword_analysis(request, scenarios, features)
+    selected_keywords = _selected_keywords(request, keyword_analysis)
     traffic = [
         KeywordEntry(term=item.term, volume=item.volume, month=item.month, rank=item.rank)
         for item in keyword_analysis
@@ -286,41 +334,90 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
     for color in colors:
         for size, scenario in zip(sizes, scenarios):
             category = scenario.product_type
-            # These are editorial structures, not keyword permutations.
+            main_terms = selected_keywords["main"]
+            highlight_terms = selected_keywords["highlight"]
+            primary_keyword = next(
+                (item for item in main_terms if re.search(r"\b(?:area|runner|accent)\s+rugs?\b", item.term, re.I)),
+                main_terms[0] if main_terms else None,
+            )
+            scene_keyword = next(
+                (item for item in main_terms if any(scene in item.term.lower() for scene in SCENE_WORDS)),
+                None,
+            )
+            keyword_parts = [_display_phrase(item.term) for item in main_terms[:3]]
+            traffic_parts = [
+                brand,
+                _display_phrase(primary_keyword.term) if primary_keyword else category,
+                _display_phrase(scene_keyword.term) if scene_keyword and scene_keyword is not primary_keyword else None,
+                size, color, *features[:2], request.style,
+            ]
+            click_parts = [
+                brand, features[0] if features else request.style,
+                _display_phrase(primary_keyword.term) if primary_keyword else category,
+                request.style, size, color, *features[1:3],
+            ]
+            balanced_parts = [
+                brand, _display_phrase(primary_keyword.term) if primary_keyword else category,
+                *keyword_parts[1:2], request.style, *features[:2], color, size,
+            ]
             structures = [
-                [brand, next((f for f in features if f in {"Washable", "Machine Washable"}), None), category, size, color,
-                 next((f for f in features if f in {"Textured", "High-Low Pile", "Arch Pattern", "Wave Pattern"}), None)],
-                [brand, category, size, color, *features[:2]],
-                [brand, next((f for f in features if f in {"Soft", "Plush", "Modern"}), None), category, size, color,
-                 next((f for f in features if f in {"Non-Slip", "Stain-Resistant"}), None)],
+                ("traffic", traffic_parts),
+                ("click", click_parts),
+                ("balanced", balanced_parts),
             ]
             seen: set[str] = set()
-            for parts in structures:
+            for strategy, parts in structures:
                 if request.title_format == "split":
                     main = _join_main(parts, 75)
-                    highlight = _natural_highlight(features, scenario)
+                    highlight_parts = [
+                        *[_display_phrase(item.term) for item in highlight_terms[:3]],
+                        request.material or "",
+                        *features[2:5],
+                        *scenario.primary_scenes[:2],
+                    ]
+                    highlight = _compact_highlight(highlight_parts)
                     full = f"{main} | {highlight}"
                 else:
                     highlight = None
-                    sentence = _natural_highlight(features, scenario)
+                    sentence = _compact_highlight([
+                        *[_display_phrase(item.term) for item in highlight_terms[:3]],
+                        request.material or "", *features[2:5], *scenario.primary_scenes[:2],
+                    ])
                     main = _join_main(parts, 200)
-                    if len(f"{main}. {sentence}") <= 200:
-                        main = f"{main}. {sentence}"
+                    if sentence and len(f"{main}, {sentence}") <= 200:
+                        main = f"{main}, {sentence}"
                     full = main
                 if not main or full.lower() in seen:
                     continue
                 seen.add(full.lower())
                 used = [item.term for item in keyword_analysis if item.term.lower() in full.lower()]
+                unused = [
+                    item.term for item in [*main_terms, *highlight_terms]
+                    if item.term.lower() not in full.lower()
+                ]
+                evidence = [
+                    f"{item.term} · 搜索量{int(item.volume):,} · {('精确短语' if item.term.lower() in full.lower() else '未覆盖')}"
+                    if item.volume is not None else f"{item.term} · 流量未知"
+                    for item in [*main_terms, *highlight_terms][:8]
+                ]
                 warnings: list[str] = []
                 if not keyword_analysis:
                     warnings.append("最新词库中没有通过类目、属性与尺寸场景校验的候选词，请人工检查类目词。")
                 if not features:
                     warnings.append("本品真实资料中未识别到稳定卖点，请补充产品事实后再确认。")
+                if any(connector in full.lower().split() for connector in LOW_VALUE_CONNECTORS):
+                    warnings.append("连接词仅因已选关键词或必要语法保留，请人工确认其流量价值。")
+                base_score = {"traffic": 88, "click": 86, "balanced": 90}[strategy]
+                coverage_score = min(10, len(used) * 3)
                 candidates.append(TitleCandidate(
                     id=str(len(candidates) + 1), color=color, size=size,
                     main_title=main, highlight_item=highlight, full_title=full,
                     main_count=len(main), highlight_count=len(highlight or ""),
-                    full_count=len(full), keywords_used=used, warnings=warnings,
+                    full_count=len(full), keywords_used=used,
+                    strategy=strategy, score=min(100, base_score + coverage_score),
+                    keyword_evidence=evidence, unused_keywords=unused,
+                    ad_keywords=[item.term for item in selected_keywords["ads"]],
+                    warnings=warnings,
                 ))
 
     return TitleGenerateResult(
@@ -334,6 +431,8 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
             "词库排名为上传文件最新月份的搜索量排名，不代表 Amazon 自然搜索排名",
             "竞品用于学习自然结构和市场表达，不照抄品牌、未经证实卖点或错误场景",
             "广告词、流量词与标题埋词服从相关性和可读性，同义词不重复堆叠",
+            "高流量且事实、尺寸场景匹配的场景词允许进入主标题，并尽量保留完整搜索短语",
+            "优先参考前10个已锁定头部竞品的信息顺序；普通文案少用连接词，流量短语中的 for 可保留",
             "主标题不超过 75 字符，Highlight Item 使用完整自然句且不超过 125 字符",
         ],
     )

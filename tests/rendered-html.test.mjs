@@ -77,7 +77,7 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /同品牌合并/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
-  assert.match(workspace, /competitor-funnel-v15/);
+  assert.match(workspace, /title-traffic-v16/);
   assert.match(workspace, /最终候选上限/);
   assert.match(workspace, /本轮候选漏斗/);
   assert.match(workspace, /verify_detail_pages/);

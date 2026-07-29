@@ -163,3 +163,31 @@ def inspect_keyword_file(filename: str, content: bytes) -> KeywordFileSummary:
         warnings=warnings,
         keywords=keyword_entries[:10_000],
     )
+
+
+def inspect_negative_file(filename: str, content: bytes) -> dict[str, object]:
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".xlsx", ".csv", ".txt"}:
+        raise ValueError("否词词库请上传 .xlsx、.csv 或 .txt 文件。")
+    if not content:
+        raise ValueError("上传的否词词库为空。")
+    values: list[str] = []
+    if suffix == ".xlsx":
+        workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        sheet = workbook.active
+        for row in sheet.iter_rows(values_only=True):
+            values.extend(_clean(value) for value in row if _clean(value))
+    else:
+        text = content.decode("utf-8-sig", errors="replace")
+        for row in csv.reader(io.StringIO(text)):
+            values.extend(_clean(value) for value in row if _clean(value))
+    header_aliases = {*KEYWORD_ALIASES, "否词", "禁用词", "negative keyword", "negative term"}
+    terms = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.lower()
+        if normalized in header_aliases or normalized in seen or len(value) > 100:
+            continue
+        seen.add(normalized)
+        terms.append(value)
+    return {"filename": filename, "valid": bool(terms), "rows": len(terms), "terms": terms[:10_000]}

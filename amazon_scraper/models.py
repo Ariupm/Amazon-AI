@@ -263,6 +263,13 @@ class KeywordEntry(BaseModel):
     volume: float | None = None
     month: str | None = None
     rank: int | None = None
+    source: str = "aba"
+
+
+class TitleKeywordSelection(BaseModel):
+    term: str
+    placement: Literal["main", "highlight", "ads", "exclude"]
+    enabled: bool = True
 
 
 class TitleGenerateRequest(BaseModel):
@@ -271,11 +278,14 @@ class TitleGenerateRequest(BaseModel):
     bullets: list[str] = Field(default_factory=list, max_length=20)
     competitor_titles: list[str] = Field(default_factory=list, max_length=100)
     keywords: list[KeywordEntry] = Field(default_factory=list, max_length=10_000)
+    keyword_selections: list[TitleKeywordSelection] = Field(default_factory=list, max_length=100)
+    negative_terms: list[str] = Field(default_factory=list, max_length=10_000)
     category: str | None = None
     material: str | None = None
     style: str | None = None
     use_case: str | None = None
     must_have: list[str] = Field(default_factory=list, max_length=30)
+    verified_improvements: list[str] = Field(default_factory=list, max_length=30)
     colors: list[str] = Field(default_factory=list, max_length=100)
     sizes: list[str] = Field(default_factory=list, max_length=100)
     title_format: Literal["classic", "split"] = "split"
@@ -292,6 +302,11 @@ class TitleCandidate(BaseModel):
     highlight_count: int = 0
     full_count: int
     keywords_used: list[str] = Field(default_factory=list)
+    strategy: Literal["traffic", "click", "balanced"] = "balanced"
+    score: int = 0
+    keyword_evidence: list[str] = Field(default_factory=list)
+    unused_keywords: list[str] = Field(default_factory=list)
+    ad_keywords: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -303,6 +318,11 @@ class TitleKeywordAnalysis(BaseModel):
     relevance: int = 0
     role: str
     reason: str
+    cluster: str = ""
+    recommended_placement: Literal["main", "highlight", "ads", "exclude"] = "ads"
+    purchase_intent: int = 0
+    click_value: int = 0
+    total_score: int = 0
 
 
 class SizeScenarioAnalysis(BaseModel):

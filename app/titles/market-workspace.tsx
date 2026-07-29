@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "competitor-funnel-v15";
+const REQUIRED_BACKEND = "title-traffic-v16";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
@@ -38,11 +38,17 @@ type GeneratedTitle = {
   highlight_item?: string; full_title: string; main_count: number;
   highlight_count: number; full_count: number; keywords_used: string[];
   warnings: string[];
+  strategy: "traffic" | "click" | "balanced"; score: number;
+  keyword_evidence: string[]; unused_keywords: string[]; ad_keywords: string[];
 };
 type KeywordAnalysis = {
   term: string; volume?: number; month?: string; rank?: number;
   relevance: number; role: string; reason: string;
+  cluster: string; recommended_placement: KeywordPlacement;
+  purchase_intent: number; click_value: number; total_score: number;
 };
+type KeywordPlacement = "main" | "highlight" | "ads" | "exclude";
+type KeywordSelection = { term: string; placement: KeywordPlacement; enabled: boolean };
 type SizeScenario = {
   size?: string; product_type: string; primary_scenes: string[];
   secondary_scenes: string[]; reasoning: string;
@@ -56,6 +62,7 @@ type SearchPlan = {
   features: string[]; guidance: string[];
 };
 type WeightedQuery = { query: string; weight: number; enabled: boolean };
+type PainInsight = { phrase: string; mentions: number; evidence: string[]; improvement: string; confirmed: boolean };
 
 const uploadGuides = [
   { key: "aba", name: "ABA 综合词库", desc: "必填；可以直接包含每月补充的卖家精灵预测搜索量。", accept: ".xlsx,.csv" },
@@ -98,8 +105,13 @@ export default function MarketWorkspace() {
   const [generatedTitles, setGeneratedTitles] = useState<GeneratedTitle[]>([]);
   const [trafficKeywords, setTrafficKeywords] = useState<{ term: string; volume?: number; month?: string; rank?: number }[]>([]);
   const [keywordAnalysis, setKeywordAnalysis] = useState<KeywordAnalysis[]>([]);
+  const [keywordSelections, setKeywordSelections] = useState<KeywordSelection[]>([]);
+  const [negativeTerms, setNegativeTerms] = useState<string[]>([]);
+  const [negativeSummary, setNegativeSummary] = useState<{valid:boolean;rows:number} | null>(null);
   const [sizeScenarios, setSizeScenarios] = useState<SizeScenario[]>([]);
   const [competitorTitleAnalysis, setCompetitorTitleAnalysis] = useState<CompetitorTitleAnalysis | null>(null);
+  const [painInsights, setPainInsights] = useState<PainInsight[]>([]);
+  const [reviewCompetitorLimit, setReviewCompetitorLimit] = useState(10);
   const candidatePageSize = 10;
 
   const selected = useMemo(() => candidates.filter(item => item.selected), [candidates]);
@@ -132,8 +144,10 @@ export default function MarketWorkspace() {
     setGeneratedTitles([]);
     setTrafficKeywords([]);
     setKeywordAnalysis([]);
+    setKeywordSelections([]);
     setSizeScenarios([]);
     setCompetitorTitleAnalysis(null);
+    setPainInsights([]);
   }
 
   async function ensureCurrentBackend() {
@@ -328,6 +342,26 @@ export default function MarketWorkspace() {
     if (!file) return;
     setFiles(current => ({ ...current, [key]: file.name }));
     setResearchStarted(false);
+    if (key === "negative") {
+      setNegativeSummary(null);
+      setLoading("negative");
+      try {
+        await ensureCurrentBackend();
+        const response = await fetch(`${API}/api/keywords/negative/inspect?filename=${encodeURIComponent(file.name)}`, {
+          method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "否词词库读取失败");
+        setNegativeTerms(result.terms || []);
+        setNegativeSummary({ valid: result.valid, rows: result.rows });
+        setMessage(`否词词库读取完成：已载入 ${result.rows} 个硬拦截词。`);
+      } catch (error) {
+        setNegativeTerms([]);
+        setNegativeSummary({ valid: false, rows: 0 });
+        setMessage(error instanceof Error ? error.message : "否词词库读取失败");
+      } finally { setLoading(""); }
+      return;
+    }
     if (key !== "aba") return;
     setAbaSummary(null);
     setLoading("aba");
@@ -405,6 +439,84 @@ export default function MarketWorkspace() {
     setTimeout(() => document.getElementById("title-research")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   }
 
+  function titleRequestPayload(includeSelections = true) {
+    const confirmedImprovements = painInsights.filter(item => item.confirmed && item.improvement.trim()).map(item => item.improvement.trim());
+    return {
+      brand: product?.brand || facts.brand || null,
+      product_title: product?.title || [facts.brand, facts.productName || facts.category, facts.material, facts.style, facts.mustHave].filter(Boolean).join(" "),
+      bullets: product?.bullets || [facts.material, facts.style, facts.useCase, facts.mustHave].filter(Boolean),
+      competitor_titles: selected.map(item => item.title),
+      keywords: abaSummary?.keywords || [],
+      keyword_selections: includeSelections ? keywordSelections : [],
+      negative_terms: negativeTerms,
+      category: facts.category || null,
+      material: facts.material || null,
+      style: facts.style || null,
+      use_case: facts.useCase || null,
+      must_have: facts.mustHave.split(/[,，\n]+/).map(value => value.trim()).filter(Boolean),
+      verified_improvements: confirmedImprovements,
+      colors, sizes, title_format: titleFormat,
+    };
+  }
+
+  async function analyzeCompetitorReviews() {
+    const targets = selected.slice(0, reviewCompetitorLimit);
+    if (!targets.length) return setMessage("请先锁定竞品。");
+    setLoading("reviews");
+    setMessage(`正在读取前 ${targets.length} 个头部竞品近期评论并提取低星痛点…`);
+    try {
+      await ensureCurrentBackend();
+      const response = await fetch(`${API}/api/scrape/batch`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: targets.map(item => item.asin), marketplace, max_review_pages: 1, headless: false, variant_mode: "fast" }),
+      });
+      const batch = await response.json();
+      if (!response.ok) throw new Error(batch.detail || "竞品评论读取失败");
+      const merged = new Map<string, PainInsight>();
+      for (const item of batch.items || []) {
+        for (const pain of item.result?.insights?.pains || []) {
+          const key = pain.phrase.toLowerCase();
+          const current = merged.get(key) || { phrase: pain.phrase, mentions: 0, evidence: [], improvement: "", confirmed: false };
+          current.mentions += pain.mentions || 0;
+          current.evidence = [...current.evidence, ...(pain.evidence || [])].slice(0, 3);
+          merged.set(key, current);
+        }
+      }
+      const insights = [...merged.values()].sort((a, b) => b.mentions - a.mentions).slice(0, 20);
+      setPainInsights(insights);
+      setMessage(`已从 ${batch.succeeded || 0} 个竞品提取 ${insights.length} 个痛点；只有确认我方改进及证据后才会参与标题。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "竞品评论分析失败");
+    } finally { setLoading(""); }
+  }
+
+  async function analyzeKeywordPlan() {
+    if (!sourceReady || !abaSummary?.valid) return;
+    setLoading("keyword-plan");
+    setMessage("正在按商品事实、流量和头部竞品结构制定关键词布置方案…");
+    try {
+      await ensureCurrentBackend();
+      const response = await fetch(`${API}/api/titles/plan`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(titleRequestPayload(false)),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "关键词方案生成失败");
+      const analysis: KeywordAnalysis[] = result.keyword_analysis || [];
+      setKeywordAnalysis(analysis);
+      setKeywordSelections(analysis.map(item => ({
+        term: item.term, placement: item.recommended_placement, enabled: item.recommended_placement !== "exclude",
+      })));
+      setTrafficKeywords(result.traffic_keywords || []);
+      setSizeScenarios(result.size_scenarios || []);
+      setCompetitorTitleAnalysis(result.competitor_analysis || null);
+      setGeneratedTitles([]);
+      setMessage(`已筛出 ${analysis.length} 个高相关流量词。请人工确认位置，再生成标题。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "关键词方案生成失败");
+    } finally { setLoading(""); }
+  }
+
   async function generateTitleCandidates() {
     if (!sourceReady || !abaSummary?.valid) return;
     setLoading("titles");
@@ -415,21 +527,7 @@ export default function MarketWorkspace() {
       const response = await fetch(`${API}/api/titles/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          brand: product?.brand || facts.brand || null,
-          product_title: product?.title || [facts.brand, facts.productName || facts.category, facts.material, facts.style, facts.mustHave].filter(Boolean).join(" "),
-          bullets: product?.bullets || [facts.material, facts.style, facts.useCase, facts.mustHave].filter(Boolean),
-          competitor_titles: selected.map(item => item.title),
-          keywords: abaSummary.keywords || [],
-          category: facts.category || null,
-          material: facts.material || null,
-          style: facts.style || null,
-          use_case: facts.useCase || null,
-          must_have: facts.mustHave.split(/[,，\n]+/).map(value => value.trim()).filter(Boolean),
-          colors,
-          sizes,
-          title_format: titleFormat,
-        }),
+        body: JSON.stringify(titleRequestPayload(true)),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || "标题生成失败");
@@ -516,19 +614,23 @@ export default function MarketWorkspace() {
           {message && <div className="marketMessage">{message}</div>}
           {candidates.length ? <><div className="candidateToolbar"><span>共 {candidates.length} 个候选 · 市场价值优先排序 · 第 {candidatePage}/{candidatePages} 页</span><div><button onClick={() => exportCompetitors("selected")} disabled={loading === "export"}>导出已选 XLSX</button><button onClick={() => exportCompetitors("all")} disabled={loading === "export"}>导出全部 XLSX</button></div></div><div className="candidateGrid">{visibleCandidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `产品相似度 ${item.overall_similarity ?? "—"}分`}</span></div><div className="candidateIdentity"><b>{item.brand || "品牌未识别"}</b><span>{item.size || "尺寸未识别"}</span>{item.parent_asin && <span>父体 {item.parent_asin}</span>}</div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}{item.monthly_sales_estimate ? `（按 ${item.monthly_sales_estimate.toLocaleString()} 排序）` : ""}</p>{item.source !== "manual" && <><div className="scoreBreakdown"><span>产品类型 {item.product_type_similarity ?? "—"}</span><span>属性 {item.attribute_similarity ?? "—"}</span><span>标题证据 {item.text_similarity ?? "—"}</span><span title={item.visual_reason || ""}>视觉 {item.image_similarity ?? "—"} · {item.visual_images_compared || 0} 组</span><span>市场价值 {item.market_value ?? item.market_similarity ?? "—"}</span></div><p className="visualReason">{item.visual_reason}</p><p className="matchReasons">{item.match_reasons?.join(" · ") || "等待人工核验"}</p></>}<label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div><div className="candidatePagination"><button disabled={candidatePage <= 1} onClick={() => setCandidatePage(page => page - 1)}>← 上一页</button><span>{candidatePage} / {candidatePages}</span><button disabled={candidatePage >= candidatePages} onClick={() => setCandidatePage(page => page + 1)}>下一页 →</button></div></> : <div className="candidateEmpty"><b>{searchPlan ? "等待确认搜索方案" : "还没有竞品搜索方案"}</b><span>{searchPlan ? "核对上方产品类型、直接竞品定义、搜索词和排除项，再点击“确认方案并搜索竞品”。" : "先准备本品资料，再点击“生成搜索方案”；系统不会立即访问 Amazon。"}</span></div>}
           {candidates.length > 0 && <div className="confirmCompetitors"><div><span>已选择 <b>{selected.length}</b> 个竞品</span>{confirmMessage && <small className={confirmed ? "confirmSuccess" : "confirmError"}>{confirmMessage}</small>}</div><button className={confirmed ? "locked" : ""} onClick={lockCompetitors}>{confirmed ? `✓ 已锁定 ${selected.length} 个竞品` : "确认竞品并锁定本轮研究"}</button></div>}
+          {confirmed && <div className="reviewPainStudy"><div className="panelHead"><div><h3>可选：竞品评论痛点与我方改进</h3><p>评论只用于发现需求。必须填写并确认我方真实改进，才允许作为标题卖点候选。</p></div><div><select value={reviewCompetitorLimit} onChange={event => setReviewCompetitorLimit(Number(event.target.value))}><option value={5}>前5个头部竞品</option><option value={10}>前10个头部竞品</option><option value={20}>前20个头部竞品</option></select><button onClick={analyzeCompetitorReviews} disabled={loading === "reviews"}>{loading === "reviews" ? "分析评论中…" : "提取低星评论痛点"}</button></div></div>
+            {!!painInsights.length && <div className="painInsightList">{painInsights.map((item, index) => <article key={item.phrase}><div><b>{item.phrase}</b><span>{item.mentions} 次提及</span></div><small title={item.evidence.join("\n")}>{item.evidence[0] || "暂无原句"}</small><input value={item.improvement} onChange={event => setPainInsights(current => current.map((value, currentIndex) => currentIndex === index ? {...value, improvement:event.target.value, confirmed:false} : value))} placeholder="填写我方已实现的改进，例如 Reinforced Non-Slip Backing" /><label><input type="checkbox" checked={item.confirmed} disabled={!item.improvement.trim()} onChange={event => setPainInsights(current => current.map((value, currentIndex) => currentIndex === index ? {...value, confirmed:event.target.checked} : value))} />已核对产品资料，确认我方具备该改进</label></article>)}</div>}
+          </div>}
         </article>
         <article className="panel uploadPanel" id="keyword-materials">
           <div className="panelHead"><div><h3>4. 补充关键词与公司资料</h3><p>ABA 综合词库必填；卖家精灵扩展数据和广告报告均为选填</p></div><span className="selectedCount">{Object.keys(files).length} 个文件</span></div>
           <div className="uploadGrid">{uploadGuides.map(guide => <label className={`uploadCard ${guide.key === "aba" ? "requiredUpload" : ""}`} key={guide.key}><input type="file" accept={guide.accept} onChange={e => handleReferenceFile(guide.key, e.target.files?.[0])} /><b>{files[guide.key] ? "✓ " : "＋ "}{guide.name}{guide.key === "aba" && <em>必填</em>}</b><p>{guide.desc}</p><span>{files[guide.key] || "点击选择文件"}</span></label>)}</div>
           {loading === "aba" && <div className="fileInspection working">正在读取 ABA 表头、关键词列和搜索量列…</div>}
           {abaSummary && <div className={abaSummary.valid ? "fileInspection success" : "fileInspection error"}><b>{abaSummary.valid ? `✓ 已识别 ${abaSummary.rows} 个关键词` : "ABA 词库未通过校验"}</b><span>{abaSummary.keyword_column ? `关键词列：${abaSummary.keyword_column}` : "未找到关键词列"}{abaSummary.volume_columns.length ? ` · 搜索量列：${abaSummary.volume_columns.join("、")}` : " · 未找到搜索量列"}{abaSummary.sheet ? ` · 工作表：${abaSummary.sheet}` : ""}</span>{abaSummary.warnings.map(warning => <small key={warning}>{warning}</small>)}</div>}
+          {negativeSummary && <div className={negativeSummary.valid ? "fileInspection success" : "fileInspection error"}><b>{negativeSummary.valid ? `✓ 已载入 ${negativeSummary.rows} 个否词` : "否词词库未通过校验"}</b><span>命中后将从标题和广告词包中硬拦截。</span></div>}
         </article>
         <div className={`nextPhase ${nextBlockers.length ? "hasBlockers" : ""}`}><div><b>下一步：竞品标题结构、关键词池与标题候选</b><span>{nextBlockers.length ? `还需完成：${nextBlockers.join("；")}` : taskMode !== "optimize" ? `资料完整，可为 ${titleCount} 个颜色/尺寸组合进入研究。` : "资料完整，可进入当前子体标题研究。"}</span>{nextNotice && <small>{nextNotice}</small>}</div><button onClick={enterResearch}>{researchStarted ? "✓ 已进入标题研究" : nextBlockers.length ? "查看待完成项 →" : "进入真实标题研究 →"}</button></div>
         {researchStarted && <article className="panel researchPanel" id="title-research">
           <div className="panelHead"><div><h3>5. 真实标题研究</h3><p>本轮研究输入已锁定；点击生成后才会产生标题，结果仍需人工编辑和确认。</p></div><span className="selectedCount">{generatedTitles.length ? `已生成 ${generatedTitles.length} 个` : "等待生成"}</span></div>
           <div className="researchInputs"><div><span>本品</span><b>{product?.asin || "全新商品 · 暂无 ASIN"}</b><small>{product?.title || [facts.brand, facts.productName || facts.category].filter(Boolean).join(" ")}</small></div><div><span>竞品</span><b>{selected.length} 个已锁定</b><small>每个品牌最多 1 个</small></div><div><span>ABA 词库</span><b>{abaSummary?.rows || 0} 个关键词</b><small>{abaSummary?.volume_columns.length ? `已识别 ${abaSummary.volume_columns.length} 个搜索量字段` : "未识别搜索量字段"}</small></div><div><span>标题任务</span><b>{taskMode === "new-product" ? `${titleCount} 个全新商品组合` : taskMode === "new-variant" ? `${titleCount} 个新增变体组合` : "优化当前子体"}</b><small>{titleFormat === "split" ? "二段标题制式" : "原标题制式"}</small></div></div>
-          <div className="generateAction"><div><b>还没有生成标题</b><span>系统将优先放置类目大词，只采用本品真实卖点，并按 ABA 相关性和搜索量辅助选词。</span></div><button onClick={generateTitleCandidates} disabled={loading === "titles"}>{loading === "titles" ? "正在生成…" : generatedTitles.length ? "重新生成标题候选" : "生成标题候选"}</button></div>
-          {!!generatedTitles.length && <section className="titleResearchReport">
+          <div className="generateAction"><div><b>{keywordSelections.length ? "关键词方案待确认" : "先制定关键词布置方案"}</b><span>高流量场景词在事实和尺寸匹配时可以进入主标题；普通表达少用连接词，已确认流量短语中的 for 保留。</span></div><button onClick={analyzeKeywordPlan} disabled={loading === "keyword-plan"}>{loading === "keyword-plan" ? "分析中…" : keywordSelections.length ? "重新分析关键词" : "分析并布置关键词"}</button></div>
+          {!!keywordAnalysis.length && <section className="titleResearchReport">
             <div className="researchReportHead"><div><b>生成前分析结果</b><span>先判断消费者、市场结构、尺寸场景与候选词，再生成标题</span></div><em>数据来自本轮真实资料</em></div>
             {competitorTitleAnalysis && <div className="competitorWritingStudy">
               <div><span>竞品样本</span><b>{competitorTitleAnalysis.sample_size} 个已锁定标题</b></div>
@@ -537,17 +639,21 @@ export default function MarketWorkspace() {
             </div>}
             {!!sizeScenarios.length && <div className="scenarioStudy"><h4>不同尺寸的市场场景判断</h4>{sizeScenarios.map(item => <article key={item.size || item.product_type}><div><b>{item.size || "当前尺寸"}</b><span>{item.product_type}</span></div><p>主场景：{item.primary_scenes.join(" / ")}</p><p>辅助场景：{item.secondary_scenes.join(" / ")}</p><small>{item.reasoning}</small></article>)}</div>}
             <div className="keywordStudy"><div className="keywordStudyHead"><div><h4>最新候选词与排名</h4><p>排名＝上传ABA词库最新月份的搜索量排名，不是 Amazon 自然位；只保留与本品、尺寸和场景一致的词。</p></div><span>{keywordAnalysis[0]?.month ? `最新字段：${keywordAnalysis[0].month}` : "词库未提供月份字段"}</span></div>
-              <div className="keywordTable"><div className="keywordRow keywordHeader"><span>词库排名</span><span>候选关键词</span><span>最新搜索量</span><span>相关度</span><span>建议位置</span><span>判断</span></div>{keywordAnalysis.map(item => <div className="keywordRow" key={item.term}><span>{item.rank ? `#${item.rank}` : "—"}</span><b>{item.term}</b><span>{item.volume?.toLocaleString() || "—"}</span><span>{item.relevance}分</span><em>{item.role}</em><small>{item.reason}</small></div>)}</div>
+              <div className="keywordTable"><div className="keywordRow keywordHeader"><span>词库排名</span><span>候选关键词</span><span>最新搜索量</span><span>综合分</span><span>人工指定位置</span><span>判断</span></div>{keywordAnalysis.map(item => {
+                const selection = keywordSelections.find(value => value.term === item.term);
+                return <div className="keywordRow" key={item.term}><span>{item.rank ? `#${item.rank}` : "—"}</span><b>{item.term}</b><span>{item.volume?.toLocaleString() || "—"}</span><span>{item.total_score}分</span><select value={selection?.placement || item.recommended_placement} onChange={event => setKeywordSelections(current => current.map(value => value.term === item.term ? {...value, placement:event.target.value as KeywordPlacement, enabled:event.target.value !== "exclude"} : value))}><option value="main">主标题</option><option value="highlight">Item Highlight</option><option value="ads">广告词包</option><option value="exclude">不采用</option></select><small>{item.reason}</small></div>;
+              })}</div>
             </div>
           </section>}
+          {!!keywordSelections.length && <div className="generateAction"><div><b>人工确认后生成三种策略</b><span>流量优先、点击吸引、均衡转化；生成器严格使用上方位置方案。</span></div><button onClick={generateTitleCandidates} disabled={loading === "titles"}>{loading === "titles" ? "正在生成…" : generatedTitles.length ? "按当前方案重新生成" : "确认关键词并生成标题"}</button></div>}
           {!!trafficKeywords.length && <div className="trafficKeywordBar"><b>通过校验的候选词</b>{trafficKeywords.slice(0, 10).map(item => <span key={item.term}>{item.rank ? `#${item.rank} · ` : ""}{item.term}{item.volume ? ` · ${item.volume.toLocaleString()}` : ""}</span>)}</div>}
           {!!generatedTitles.length && <div className="generatedTitles" id="generated-titles">{generatedTitles.map((item, index) => {
             const mainLimit = titleFormat === "split" ? 75 : 200;
             return <article className="generatedTitleCard" key={item.id}>
-              <div className="generatedTitleHead"><div><span>候选 {index + 1}</span><b>{[item.color, item.size].filter(Boolean).join(" · ") || "当前商品"}</b></div><button onClick={() => navigator.clipboard?.writeText(item.full_title)}>复制完整标题</button></div>
+              <div className="generatedTitleHead"><div><span>{item.strategy === "traffic" ? "流量优先" : item.strategy === "click" ? "点击吸引" : "均衡转化"} · {item.score}分</span><b>{[item.color, item.size].filter(Boolean).join(" · ") || "当前商品"}</b></div><button onClick={() => navigator.clipboard?.writeText(item.full_title)}>复制完整标题</button></div>
               <label>{titleFormat === "split" ? "主标题" : "完整标题"}<span className={item.main_count <= mainLimit ? "countOk" : "countError"}>{item.main_count} / {mainLimit}</span><textarea value={item.main_title} onChange={event => editGeneratedTitle(item.id, "main_title", event.target.value)} /></label>
               {titleFormat === "split" && <label>Highlight Item<span className={item.highlight_count <= 125 ? "countOk" : "countError"}>{item.highlight_count} / 125</span><textarea value={item.highlight_item || ""} onChange={event => editGeneratedTitle(item.id, "highlight_item", event.target.value)} /></label>}
-              <div className="titleEvidence"><span>覆盖词：{item.keywords_used.length ? item.keywords_used.join(" · ") : "未匹配到高相关 ABA 词"}</span>{item.warnings.map(warning => <small key={warning}>⚠ {warning}</small>)}</div>
+              <div className="titleEvidence"><span>覆盖词：{item.keywords_used.length ? item.keywords_used.join(" · ") : "未精确覆盖高相关 ABA 词"}</span>{item.keyword_evidence.map(value => <small key={value}>{value}</small>)}{!!item.unused_keywords.length && <small>未放入：{item.unused_keywords.join(" · ")}（字符或结构限制）</small>}{!!item.ad_keywords.length && <small>广告词包：{item.ad_keywords.join(" · ")}</small>}{item.warnings.map(warning => <small key={warning}>⚠ {warning}</small>)}</div>
             </article>;
           })}</div>}
         </article>}

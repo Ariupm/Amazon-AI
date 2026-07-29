@@ -17,12 +17,12 @@ from .models import (
 )
 from .competitors import build_competitor_plan, discover_competitors
 from .excel_export import build_competitors_xlsx, build_products_xlsx
-from .keyword_files import inspect_keyword_file
+from .keyword_files import inspect_keyword_file, inspect_negative_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 from .title_generator import generate_titles
 
-FEATURE_VERSION = "competitor-funnel-v15"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.15.0")
+FEATURE_VERSION = "title-traffic-v16"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.16.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -179,9 +179,25 @@ async def inspect_keywords(request: Request, filename: str) -> KeywordFileSummar
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@app.post("/api/keywords/negative/inspect")
+async def inspect_negative_keywords(request: Request, filename: str) -> dict[str, object]:
+    content = await request.body()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="否词文件不能超过 20 MB。")
+    try:
+        return inspect_negative_file(filename, content)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.post("/api/titles/generate", response_model=TitleGenerateResult)
 async def title_generation(request: TitleGenerateRequest) -> TitleGenerateResult:
     result = generate_titles(request)
     if not result.candidates:
         raise HTTPException(status_code=422, detail="真实资料不足，未能形成标题候选。")
     return result
+
+
+@app.post("/api/titles/plan", response_model=TitleGenerateResult)
+async def title_keyword_plan(request: TitleGenerateRequest) -> TitleGenerateResult:
+    return generate_titles(request)

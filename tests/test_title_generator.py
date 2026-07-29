@@ -1,6 +1,6 @@
 import unittest
 
-from amazon_scraper.models import KeywordEntry, TitleGenerateRequest
+from amazon_scraper.models import KeywordEntry, TitleGenerateRequest, TitleKeywordSelection
 from amazon_scraper.title_generator import generate_titles
 
 
@@ -66,6 +66,41 @@ class TitleGeneratorTests(unittest.TestCase):
         self.assertNotIn("bathroom rugs", [item.term for item in result.traffic_keywords])
         self.assertNotIn("runner rug", [item.term for item in result.traffic_keywords])
         self.assertIn("Living Room", result.size_scenarios[0].primary_scenes)
+
+    def test_keeps_for_inside_confirmed_high_traffic_scene_phrase(self):
+        result = generate_titles(TitleGenerateRequest(
+            brand="GENIMO",
+            product_title="GENIMO Washable Vintage Area Rug",
+            bullets=["Indoor rug designed for living room."],
+            keywords=[
+                KeywordEntry(term="area rugs for living room", volume=80000),
+                KeywordEntry(term="washable area rugs", volume=50000),
+            ],
+            keyword_selections=[
+                TitleKeywordSelection(term="area rugs for living room", placement="main"),
+                TitleKeywordSelection(term="washable area rugs", placement="highlight"),
+            ],
+            category="Area Rug",
+            use_case="Living Room",
+            sizes=["8' x 10'"],
+        ))
+        self.assertTrue(any("Area Rugs for Living Room" in item.main_title for item in result.candidates))
+
+    def test_negative_terms_and_unverified_pains_never_become_title_claims(self):
+        result = generate_titles(TitleGenerateRequest(
+            brand="GENIMO",
+            product_title="GENIMO Soft Area Rug",
+            keywords=[
+                KeywordEntry(term="outdoor area rug", volume=90000),
+                KeywordEntry(term="soft area rug", volume=20000),
+            ],
+            negative_terms=["outdoor"],
+            category="Area Rug",
+            verified_improvements=["Reinforced Edges"],
+            sizes=["5' x 7'"],
+        ))
+        self.assertNotIn("outdoor area rug", [item.term for item in result.traffic_keywords])
+        self.assertTrue(any("Reinforced Edges" in item.full_title for item in result.candidates))
 
 
 if __name__ == "__main__":
