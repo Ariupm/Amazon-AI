@@ -161,6 +161,7 @@ def _keyword_analysis(
         request.material or "", request.style or "", request.use_case or "",
         *request.must_have, *features,
     ]))
+    verified_style_tokens = _tokens(request.style or "")
     allowed_scenes = {
         scene.lower()
         for scenario in scenarios
@@ -194,10 +195,14 @@ def _keyword_analysis(
         category_match = bool(re.search(r"\b(area rug|area rugs|runner rug|runner rugs|accent rug|accent rugs)\b", lower))
         scene_match = any(scene in lower for scene in allowed_scenes)
         feature_match = any(feature.lower().replace("-", " ") in lower.replace("-", " ") for feature in features)
-        relevance = min(100, 45 + overlap * 13 + category_match * 35 + scene_match * 12 + feature_match * 17)
+        style_match = bool(meaningful & verified_style_tokens)
+        relevance = min(100, 45 + overlap * 13 + category_match * 35 + scene_match * 12 + feature_match * 17 + style_match * 12)
         if relevance < 80:
             continue
-        if category_match:
+        if category_match and style_match:
+            role = "主标题风格词"
+            reason = "同时覆盖准确类目和本品已确认风格，优先放在主标题。"
+        elif category_match:
             role = "主标题类目词"
             reason = "直接说明消费者正在浏览的商品类型，优先放在主标题前部。"
         elif feature_match:
@@ -209,14 +214,14 @@ def _keyword_analysis(
         else:
             role = "辅助流量词"
             reason = "与本品相关，但应以自然表达为先，不强行重复埋词。"
-        purchase_intent = min(100, 45 + category_match * 25 + feature_match * 20 + scene_match * 10)
-        click_value = min(100, 35 + feature_match * 35 + scene_match * 20 + category_match * 10)
+        purchase_intent = min(100, 45 + category_match * 25 + feature_match * 20 + scene_match * 10 + style_match * 10)
+        click_value = min(100, 35 + feature_match * 35 + scene_match * 20 + category_match * 10 + style_match * 25)
         volume_score = round(100 * math.log1p(item.volume or 0) / math.log1p(max_volume)) if max_volume else 0
         total_score = round(
             relevance * .40 + volume_score * .30 + purchase_intent * .15
             + click_value * .10 + min(100, purchase_intent + 10) * .05
         )
-        placement = "main" if category_match or (scene_match and volume_score >= 60) else "highlight" if feature_match or scene_match else "ads"
+        placement = "main" if category_match or style_match or (scene_match and volume_score >= 60) else "highlight" if feature_match or scene_match else "ads"
         cluster_tokens = sorted(_tokens(term))
         cluster = " ".join(cluster_tokens[:5])
         score = total_score
@@ -316,6 +321,15 @@ def _selected_keywords(
     return result
 
 
+def _style_parts(value: str | None) -> list[str]:
+    result: list[str] = []
+    for raw in re.split(r"[,/|;，]+", value or ""):
+        part = re.sub(r"\s+", " ", raw).strip(" ,|-")
+        if part and part.lower() not in {item.lower() for item in result}:
+            result.append(part)
+    return result
+
+
 def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
     brand = _clean_brand(request.brand, request.product_title)
     features = _features(request)
@@ -334,6 +348,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
     for color in colors:
         for size, scenario in zip(sizes, scenarios):
             category = scenario.product_type
+            styles = _style_parts(request.style)
             main_terms = selected_keywords["main"]
             highlight_terms = selected_keywords["highlight"]
             primary_keyword = next(
@@ -349,16 +364,16 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 brand,
                 _display_phrase(primary_keyword.term) if primary_keyword else category,
                 _display_phrase(scene_keyword.term) if scene_keyword and scene_keyword is not primary_keyword else None,
-                size, color, *features[:2], request.style,
+                *styles[:1], size, color, *features[:2],
             ]
             click_parts = [
                 brand, features[0] if features else request.style,
                 _display_phrase(primary_keyword.term) if primary_keyword else category,
-                request.style, size, color, *features[1:3],
+                *styles[:2], size, color, *features[1:3],
             ]
             balanced_parts = [
                 brand, _display_phrase(primary_keyword.term) if primary_keyword else category,
-                *keyword_parts[1:2], request.style, *features[:2], color, size,
+                *keyword_parts[1:2], *styles[:1], *features[:2], color, size,
             ]
             structures = [
                 ("traffic", traffic_parts),
@@ -405,6 +420,8 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                     warnings.append("最新词库中没有通过类目、属性与尺寸场景校验的候选词，请人工检查类目词。")
                 if not features:
                     warnings.append("本品真实资料中未识别到稳定卖点，请补充产品事实后再确认。")
+                if styles and not any(style.lower() in full.lower() for style in styles):
+                    warnings.append("已确认风格未进入标题，请缩减低优先级属性或人工指定风格关键词。")
                 if any(connector in full.lower().split() for connector in LOW_VALUE_CONNECTORS):
                     warnings.append("连接词仅因已选关键词或必要语法保留，请人工确认其流量价值。")
                 base_score = {"traffic": 88, "click": 86, "balanced": 90}[strategy]

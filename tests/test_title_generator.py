@@ -102,6 +102,25 @@ class TitleGeneratorTests(unittest.TestCase):
         self.assertNotIn("outdoor area rug", [item.term for item in result.traffic_keywords])
         self.assertTrue(any("Reinforced Edges" in item.full_title for item in result.candidates))
 
+    def test_verified_style_is_prioritized_in_main_title(self):
+        result = generate_titles(TitleGenerateRequest(
+            brand="Yamaziot",
+            product_title="Yamaziot Washable Runner Rug",
+            bullets=["Machine washable low pile rug."],
+            keywords=[
+                KeywordEntry(term="runner rug", volume=80000),
+                KeywordEntry(term="boho runner rug", volume=50000),
+            ],
+            category="Runner Rug",
+            style="Boho, Vintage, Distressed, Floral, Traditional",
+            sizes=["2' x 6'"],
+            title_format="split",
+        ))
+        self.assertTrue(result.candidates)
+        self.assertTrue(all("Boho" in item.main_title for item in result.candidates))
+        boho = next(item for item in result.keyword_analysis if item.term == "boho runner rug")
+        self.assertEqual(boho.recommended_placement, "main")
+
 
 if __name__ == "__main__":
     unittest.main()

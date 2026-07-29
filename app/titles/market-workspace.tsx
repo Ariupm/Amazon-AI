@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "review-sentiment-v17";
+const REQUIRED_BACKEND = "style-title-v18";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
@@ -109,6 +109,7 @@ export default function MarketWorkspace() {
   const [trafficKeywords, setTrafficKeywords] = useState<{ term: string; volume?: number; month?: string; rank?: number }[]>([]);
   const [keywordAnalysis, setKeywordAnalysis] = useState<KeywordAnalysis[]>([]);
   const [keywordSelections, setKeywordSelections] = useState<KeywordSelection[]>([]);
+  const [keywordPlanMessage, setKeywordPlanMessage] = useState("");
   const [negativeTerms, setNegativeTerms] = useState<string[]>([]);
   const [negativeSummary, setNegativeSummary] = useState<{valid:boolean;rows:number} | null>(null);
   const [sizeScenarios, setSizeScenarios] = useState<SizeScenario[]>([]);
@@ -253,6 +254,7 @@ export default function MarketWorkspace() {
     setTrafficKeywords([]);
     setKeywordAnalysis([]);
     setKeywordSelections([]);
+    setKeywordPlanMessage("");
     setSizeScenarios([]);
     setCompetitorTitleAnalysis(null);
     setPainInsights([]);
@@ -650,6 +652,7 @@ export default function MarketWorkspace() {
   async function analyzeKeywordPlan() {
     if (!sourceReady || !abaSummary?.valid) return;
     setLoading("keyword-plan");
+    setKeywordPlanMessage("正在重新计算流量、事实相关性、风格和建议位置…");
     setMessage("正在按商品事实、流量和头部竞品结构制定关键词布置方案…");
     try {
       await ensureCurrentBackend();
@@ -668,9 +671,12 @@ export default function MarketWorkspace() {
       setSizeScenarios(result.size_scenarios || []);
       setCompetitorTitleAnalysis(result.competitor_analysis || null);
       setGeneratedTitles([]);
+      setKeywordPlanMessage(`✓ 已重新分析 ${analysis.length} 个高相关词；风格匹配词优先建议进入主标题。`);
       setMessage(`已筛出 ${analysis.length} 个高相关流量词。请人工确认位置，再生成标题。`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "关键词方案生成失败");
+      const text = error instanceof Error ? error.message : "关键词方案生成失败";
+      setKeywordPlanMessage(`⚠ ${text}`);
+      setMessage(text);
     } finally { setLoading(""); }
   }
 
@@ -789,6 +795,7 @@ export default function MarketWorkspace() {
           <div className="panelHead"><div><h3>5. 真实标题研究</h3><p>本轮研究输入已锁定；点击生成后才会产生标题，结果仍需人工编辑和确认。</p></div><span className="selectedCount">{generatedTitles.length ? `已生成 ${generatedTitles.length} 个` : "等待生成"}</span></div>
           <div className="researchInputs"><div><span>本品</span><b>{product?.asin || "全新商品 · 暂无 ASIN"}</b><small>{product?.title || [facts.brand, facts.productName || facts.category].filter(Boolean).join(" ")}</small></div><div><span>竞品</span><b>{selected.length} 个已锁定</b><small>每个品牌最多 1 个</small></div><div><span>ABA 词库</span><b>{abaSummary?.rows || 0} 个关键词</b><small>{abaSummary?.volume_columns.length ? `已识别 ${abaSummary.volume_columns.length} 个搜索量字段` : "未识别搜索量字段"}</small></div><div><span>标题任务</span><b>{taskMode === "new-product" ? `${titleCount} 个全新商品组合` : taskMode === "new-variant" ? `${titleCount} 个新增变体组合` : "优化当前子体"}</b><small>{titleFormat === "split" ? "二段标题制式" : "原标题制式"}</small></div></div>
           <div className="generateAction"><div><b>{keywordSelections.length ? "关键词方案待确认" : "先制定关键词布置方案"}</b><span>高流量场景词在事实和尺寸匹配时可以进入主标题；普通表达少用连接词，已确认流量短语中的 for 保留。</span></div><button onClick={analyzeKeywordPlan} disabled={loading === "keyword-plan"}>{loading === "keyword-plan" ? "分析中…" : keywordSelections.length ? "重新分析关键词" : "分析并布置关键词"}</button></div>
+          {keywordPlanMessage && <div className="keywordPlanMessage">{keywordPlanMessage}</div>}
           {!!keywordAnalysis.length && <section className="titleResearchReport">
             <div className="researchReportHead"><div><b>生成前分析结果</b><span>先判断消费者、市场结构、尺寸场景与候选词，再生成标题</span></div><em>数据来自本轮真实资料</em></div>
             {competitorTitleAnalysis && <div className="competitorWritingStudy">
