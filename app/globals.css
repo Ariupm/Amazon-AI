@@ -286,5 +286,13 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 
 @media(max-width:900px){.asinSource .asinActionRow{grid-template-columns:1fr 120px}.asinSource .readProductButton{grid-column:1/-1}}
 @media(max-width:600px){.asinSource .asinActionRow{grid-template-columns:1fr}.asinSource .readProductButton{grid-column:auto;width:100%}.asinSource>.optimizeScopeSwitch{grid-template-columns:1fr}.taskChoices>button{min-height:auto}.titleFormatRow{padding:10px}}
+
+.competitorWritingStudy .formulaStudy{position:relative;padding:16px;background:linear-gradient(135deg,#eef8f3,#f8fcfa);border-color:#bcd8cc}
+.formulaStudy>b{font-size:14px!important;color:#0b684f!important;padding-right:110px}
+.formulaStudy>em{position:absolute;right:13px;top:12px;border-radius:999px;background:#fff;color:#08755d;padding:4px 7px;font-size:8px;font-style:normal}
+.structureChips{display:flex;flex-wrap:wrap;gap:7px}
+.structureChips i{border:1px solid #d6e4de;border-radius:999px;background:#f6faf8;color:#315b4f;padding:6px 9px;font-size:9px;font-style:normal}
+.competitorWritingStudy ul{display:grid;gap:6px;margin:2px 0 0;padding-left:17px}
+.competitorWritingStudy li{font-size:9px;line-height:1.45;color:#4f655e}
 @media(max-width:850px){.competitorWritingStudy,.scenarioStudy,.painInsightList{grid-template-columns:1fr}.competitorTermGrid{grid-template-columns:1fr 1fr}.scenarioStudy h4{grid-column:auto}.keywordTable{overflow-x:auto}.keywordRow{min-width:760px}.painStudyHead{align-items:flex-start;flex-direction:column}.painSummary{grid-template-columns:repeat(3,1fr)}.painSummary p{grid-column:1/-1;margin:0}}@media(max-width:560px){.painStudyActions{width:100%;align-items:stretch;flex-direction:column}.painSummary,.competitorTermGrid{grid-template-columns:1fr}.painSummary p{grid-column:auto}.painInsightList{padding:11px}}
 @media(max-width:520px){.researchInputs{grid-template-columns:1fr}.generateAction{align-items:stretch;flex-direction:column}.generateAction button{width:100%}.researchReportHead,.keywordStudyHead{align-items:flex-start;flex-direction:column}}

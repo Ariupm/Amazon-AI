@@ -50,6 +50,24 @@ SCENE_WORDS = {
     "living room", "bedroom", "dining room", "kitchen", "hallway",
     "entryway", "nursery", "home office", "bathroom", "laundry room",
 }
+SEMANTIC_CLAIMS = {
+    "non_slip": r"\b(?:non[- ]?slip|non[- ]?skid|anti[- ]?slip)\b",
+    "washable": r"\b(?:machine[- ]?washable|washable)\b",
+    "soft": r"\b(?:ultra[- ]?soft|super[- ]?soft|soft)\b",
+    "low_pile": r"\b(?:low[- ]?pile|thin[- ]?pile)\b",
+    "stain_resistant": r"\bstain[- ]?resistant\b",
+    "runner_rug": r"\brunner\s+rugs?\b",
+    "area_rug": r"\b(?:large\s+)?area\s+rugs?\b",
+    "accent_rug": r"\baccent\s+rugs?\b",
+    "scene_kitchen": r"\bkitchen\b",
+    "scene_hallway": r"\bhallway\b",
+    "scene_living_room": r"\bliving\s+room\b",
+    "scene_bedroom": r"\bbedroom\b",
+    "scene_dining_room": r"\bdining\s+room\b",
+    "scene_entryway": r"\bentryway\b",
+    "scene_laundry": r"\blaundry(?:\s+room)?\b",
+    "scene_bathroom": r"\bbathroom\b",
+}
 
 
 def _tokens(value: str) -> set[str]:
@@ -324,6 +342,39 @@ def _competitor_analysis(request: TitleGenerateRequest, features: list[str]) -> 
         if competitor_text.count(feature.lower().replace("-", " ")) > 0
     ][:6]
     head_titles = titles[: min(10, len(titles))]
+    slot_patterns = {
+        "Category": r"\b(?:area|runner|accent)\s+rugs?\b",
+        "Feature": r"\b(?:washable|non[- ]?(?:slip|skid)|low[- ]?pile|soft|stain[- ]?resistant|textured)\b",
+        "Style": r"\b(?:boho|vintage|modern|traditional|farmhouse|moroccan|persian|abstract|floral|geometric)\b",
+        "Material": r"\b(?:polyester|polypropylene|nylon|cotton|wool|jute|chenille|microfiber|viscose)\b",
+        "Scene": r"\b(?:living room|bedroom|dining room|kitchen|hallway|entryway|laundry room|bathroom)\b",
+        "Size": r"\b\d+(?:\.\d+)?\s*(?:'|ft|feet)?\s*[x×]\s*\d+(?:\.\d+)?\b",
+    }
+    slot_orders: Counter[str] = Counter()
+    slot_positions: dict[str, list[float]] = {slot: [] for slot in slot_patterns}
+    lengths = sorted(len(title) for title in titles)
+    for title in titles:
+        without_brand = re.sub(r"^\S+\s+", "", title)
+        positions: list[tuple[int, str]] = []
+        for slot, pattern in slot_patterns.items():
+            match = re.search(pattern, without_brand, re.I)
+            if match:
+                positions.append((match.start(), slot))
+                slot_positions[slot].append(match.start() / max(1, len(without_brand)))
+        order = " → ".join(slot for _, slot in sorted(positions))
+        if order:
+            slot_orders[order] += 1
+    dominant_formula, dominant_count = slot_orders.most_common(1)[0] if slot_orders else ("", 0)
+    position_insights = []
+    for slot, values in slot_positions.items():
+        if not values:
+            continue
+        average = sum(values) / len(values)
+        region = "前段" if average <= .33 else "中段" if average <= .67 else "后段"
+        position_insights.append(f"{slot}：{round(len(values) * 100 / max(1, len(titles)))}% 标题出现，通常位于{region}")
+    median_length = lengths[len(lengths) // 2] if lengths else 0
+    lower = lengths[max(0, round((len(lengths) - 1) * .25))] if lengths else 0
+    upper = lengths[min(len(lengths) - 1, round((len(lengths) - 1) * .75))] if lengths else 0
     early_category = sum(bool(re.search(r"\b(?:area|runner|accent)\s+rugs?\b", " ".join(title.split()[:8]), re.I)) for title in head_titles)
     structure = (
         "Brand + high-traffic category/scene phrase + strongest differentiator + style + size/color."
@@ -335,14 +386,39 @@ def _competitor_analysis(request: TitleGenerateRequest, features: list[str]) -> 
         common_openings=[phrase for phrase, _ in opening_counter.most_common(5)],
         common_features=common_features,
         recommended_structure=structure,
-        consumer_note="前10个已锁定竞品视为头部样本，优先学习类目词位置和信息顺序；不复制品牌、虚假属性或连接词堆叠。",
+        consumer_note="前10个已锁定竞品视为头部样本；学习信息槽位和顺序，不复制品牌、虚假属性或高频词堆叠。",
+        dominant_formula=f"Brand → {dominant_formula}" if dominant_formula else structure,
+        formula_coverage_percent=round(dominant_count * 100 / max(1, len(titles))),
+        common_slot_orders=[f"Brand → {value}（{count}个）" for value, count in slot_orders.most_common(3)],
+        position_insights=position_insights,
+        median_length=median_length,
+        length_range=f"{lower}–{upper} 字符" if lengths else "",
+        anti_patterns=["同义卖点跨段重复", "连续堆放多个高度重合长尾词", "未经产品事实确认的功能或场景"],
     )
+
+
+def _dedupe_semantic_part(raw: str | None, used_claims: set[str]) -> str:
+    part = re.sub(r"\s+", " ", raw or "").strip(" ,.|-")
+    if not part:
+        return ""
+    normalized = part
+    for claim, pattern in SEMANTIC_CLAIMS.items():
+        if not re.search(pattern, normalized, re.I):
+            continue
+        if claim in used_claims:
+            normalized = re.sub(pattern, " ", normalized, flags=re.I)
+        else:
+            used_claims.add(claim)
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = re.sub(r"^(?:for|with|and)\b|\b(?:for|with|and)$", "", normalized, flags=re.I)
+    return normalized.strip(" ,.|-")
 
 
 def _join_main(parts: list[str | None], limit: int) -> str:
     result = ""
+    used_claims: set[str] = set()
     for raw in parts:
-        part = re.sub(r"\s+", " ", raw or "").strip(" ,|-")
+        part = _dedupe_semantic_part(raw, used_claims)
         if not part or part.lower() in result.lower():
             continue
         proposed = f"{result}, {part}" if result else part
@@ -357,10 +433,19 @@ def _display_phrase(value: str) -> str:
     return " ".join(word.lower() if index and word.lower() in small else word.capitalize() for index, word in enumerate(words))
 
 
-def _compact_highlight(parts: list[str], limit: int = 125) -> str:
+def _keyword_scene(value: str) -> str | None:
+    lower = value.lower()
+    return next((_display_phrase(scene) for scene in SCENE_WORDS if scene in lower), None)
+
+
+def _compact_highlight(parts: list[str], limit: int = 125, existing: str = "") -> str:
     result = ""
+    used_claims = {
+        claim for claim, pattern in SEMANTIC_CLAIMS.items()
+        if re.search(pattern, existing, re.I)
+    }
     for raw in parts:
-        part = re.sub(r"\s+", " ", raw).strip(" ,.|-")
+        part = _dedupe_semantic_part(raw, used_claims)
         if not part or part.lower() in result.lower():
             continue
         proposed = f"{result}, {part}" if result else part
@@ -441,21 +526,38 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 (item for item in main_terms if any(scene in item.term.lower() for scene in SCENE_WORDS)),
                 None,
             )
-            keyword_parts = [_display_phrase(item.term) for item in main_terms[:3]]
+            scene_part = _keyword_scene(scene_keyword.term) if scene_keyword and scene_keyword is not primary_keyword else None
+            category_part = _display_phrase(primary_keyword.term) if primary_keyword else category
+            formula_slots = re.findall(
+                r"\b(?:Brand|Category|Feature|Style|Material|Scene|Size)\b",
+                competitor_analysis.dominant_formula,
+            )
+            slot_values: dict[str, list[str | None]] = {
+                "Brand": [brand],
+                "Category": [category_part],
+                "Feature": features[:2],
+                "Style": styles[:1],
+                "Material": [request.material],
+                "Scene": [scene_part or (scenario.primary_scenes[0] if scenario.primary_scenes else None)],
+                "Size": [title_size, color],
+            }
+            formula_parts = [
+                part for slot in formula_slots for part in slot_values.get(slot, [])
+            ] if formula_slots else []
             traffic_parts = [
                 brand,
-                _display_phrase(primary_keyword.term) if primary_keyword else category,
-                _display_phrase(scene_keyword.term) if scene_keyword and scene_keyword is not primary_keyword else None,
+                category_part,
+                scene_part,
                 *styles[:1], title_size, color, *features[:2],
             ]
             click_parts = [
                 brand, features[0] if features else request.style,
-                _display_phrase(primary_keyword.term) if primary_keyword else category,
+                category_part,
                 *styles[:2], title_size, color, *features[1:3],
             ]
             balanced_parts = [
-                brand, _display_phrase(primary_keyword.term) if primary_keyword else category,
-                *keyword_parts[1:2],
+                *formula_parts,
+                category_part, scene_part,
                 _display_phrase(size_market_phrase) if size_market_phrase else None,
                 *styles[:1], *features[:2], color, title_size,
             ]
@@ -469,20 +571,18 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 if request.title_format == "split":
                     main = _join_main(parts, 75)
                     highlight_parts = [
-                        *[_display_phrase(item.term) for item in highlight_terms[:3]],
                         request.material or "",
                         *features[2:5],
                         *scenario.primary_scenes[:2],
                     ]
-                    highlight = _compact_highlight(highlight_parts)
+                    highlight = _compact_highlight(highlight_parts, existing=main)
                     full = f"{main} | {highlight}"
                 else:
                     highlight = None
-                    sentence = _compact_highlight([
-                        *[_display_phrase(item.term) for item in highlight_terms[:3]],
-                        request.material or "", *features[2:5], *scenario.primary_scenes[:2],
-                    ])
                     main = _join_main(parts, 200)
+                    sentence = _compact_highlight([
+                        request.material or "", *features[2:5], *scenario.primary_scenes[:2],
+                    ], existing=main)
                     if sentence and len(f"{main}, {sentence}") <= 200:
                         main = f"{main}, {sentence}"
                     full = main
@@ -540,6 +640,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
             "高流量且事实、尺寸场景匹配的场景词允许进入主标题，并尽量保留完整搜索短语",
             "优先参考前10个已锁定头部竞品的信息顺序；普通文案少用连接词，流量短语中的 for 可保留",
             "父体批量优化时，先按尺寸匹配竞品标题；同尺寸证据不足才回退到全体已锁定竞品",
+            "先按头部竞品主导槽位公式组织信息，再填充流量词；同义卖点和相同场景在主标题与 Highlight 合计只表达一次",
             "主标题不超过 75 字符，Highlight Item 使用完整自然句且不超过 125 字符",
         ],
     )

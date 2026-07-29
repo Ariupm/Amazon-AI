@@ -340,6 +340,13 @@ class CompetitorTitleAnalysis(BaseModel):
     common_features: list[str] = Field(default_factory=list)
     recommended_structure: str
     consumer_note: str
+    dominant_formula: str = ""
+    formula_coverage_percent: int = 0
+    common_slot_orders: list[str] = Field(default_factory=list)
+    position_insights: list[str] = Field(default_factory=list)
+    median_length: int = 0
+    length_range: str = ""
+    anti_patterns: list[str] = Field(default_factory=list)
 
 
 class CompetitorTermAnalysis(BaseModel):

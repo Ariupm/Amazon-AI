@@ -1,3 +1,4 @@
+import re
 import unittest
 
 from amazon_scraper.models import KeywordEntry, TitleGenerateRequest, TitleKeywordSelection
@@ -160,6 +161,39 @@ class TitleGeneratorTests(unittest.TestCase):
         ))
         self.assertEqual({item.size for item in result.candidates}, {"2' x 6'", "8' x 10'"})
         self.assertTrue(any("参考 2 个同尺寸" in evidence for item in result.candidates for evidence in item.keyword_evidence))
+
+    def test_semantic_claims_never_repeat_across_split_title(self):
+        result = generate_titles(TitleGenerateRequest(
+            brand="Yamaziot",
+            product_title="Yamaziot Washable Non Slip Boho Runner Rug",
+            bullets=["Soft polyester runner rug for hallway and kitchen."],
+            competitor_titles=[
+                "BrandA Runner Rug Non Slip Washable for Hallway",
+                "BrandB Kitchen Runner Rugs Non Skid Washable Boho",
+                "BrandC Washable Runner Rug Soft Low Pile",
+            ],
+            keywords=[
+                KeywordEntry(term="runner rug non slip", volume=90000),
+                KeywordEntry(term="kitchen runner rugs non skid washable", volume=70000),
+                KeywordEntry(term="hallway rugs indoor non slip", volume=50000),
+            ],
+            keyword_selections=[
+                TitleKeywordSelection(term="runner rug non slip", placement="main"),
+                TitleKeywordSelection(term="kitchen runner rugs non skid washable", placement="main"),
+                TitleKeywordSelection(term="hallway rugs indoor non slip", placement="highlight"),
+            ],
+            category="Runner Rug", style="Boho", use_case="Hallway, Kitchen",
+            must_have=["Washable", "Non-Slip", "Soft"], sizes=["2' x 6'"],
+        ))
+        for item in result.candidates:
+            normalized = item.full_title.lower().replace("-", " ")
+            self.assertEqual(
+                len(re.findall(r"\b(?:non slip|non skid|anti slip)\b", normalized)),
+                1,
+            )
+            self.assertEqual(len(re.findall(r"\bwashable\b", normalized)), 1)
+        self.assertTrue(result.competitor_analysis.dominant_formula)
+        self.assertTrue(result.competitor_analysis.position_insights)
 
 
 if __name__ == "__main__":

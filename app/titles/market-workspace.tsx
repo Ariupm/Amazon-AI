@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "parent-size-title-batch-v20";
+const REQUIRED_BACKEND = "structured-title-dedupe-v21";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
@@ -60,6 +60,9 @@ type SizeScenario = {
 type CompetitorTitleAnalysis = {
   sample_size: number; common_openings: string[]; common_features: string[];
   recommended_structure: string; consumer_note: string;
+  dominant_formula: string; formula_coverage_percent: number;
+  common_slot_orders: string[]; position_insights: string[];
+  median_length: number; length_range: string; anti_patterns: string[];
 };
 type CompetitorTermAnalysis = {
   term: string; document_frequency: number; weighted_frequency: number;
@@ -915,9 +918,12 @@ export default function MarketWorkspace() {
           {!!keywordAnalysis.length && <section className="titleResearchReport">
             <div className="researchReportHead"><div><b>生成前分析结果</b><span>先判断消费者、市场结构、尺寸场景与候选词，再生成标题</span></div><em>数据来自本轮真实资料</em></div>
             {competitorTitleAnalysis && <div className="competitorWritingStudy">
-              <div><span>竞品样本</span><b>{competitorTitleAnalysis.sample_size} 个已锁定标题</b></div>
-              <div><span>竞品高频真实卖点</span><b>{competitorTitleAnalysis.common_features.join(" · ") || "未识别到稳定共性"}</b></div>
-              <div className="wideStudy"><span>建议英文结构</span><b>{competitorTitleAnalysis.recommended_structure}</b><small>{competitorTitleAnalysis.consumer_note}</small></div>
+              <div><span>分析样本</span><b>{competitorTitleAnalysis.sample_size} 个已锁定标题</b><small>头部10个样本优先参与结构判断</small></div>
+              <div><span>标题长度</span><b>中位数 {competitorTitleAnalysis.median_length || "—"} 字符</b><small>中间区间：{competitorTitleAnalysis.length_range || "样本不足"}</small></div>
+              <div className="wideStudy formulaStudy"><span>头部竞品主导公式</span><b>{competitorTitleAnalysis.dominant_formula || competitorTitleAnalysis.recommended_structure}</b><em>{competitorTitleAnalysis.formula_coverage_percent || 0}% 样本采用相同槽位顺序</em><small>{competitorTitleAnalysis.consumer_note}</small></div>
+              {!!competitorTitleAnalysis.common_slot_orders?.length && <div className="wideStudy"><span>常见结构排序</span><div className="structureChips">{competitorTitleAnalysis.common_slot_orders.map(value => <i key={value}>{value}</i>)}</div></div>}
+              {!!competitorTitleAnalysis.position_insights?.length && <div><span>各信息槽位出现位置</span><ul>{competitorTitleAnalysis.position_insights.map(value => <li key={value}>{value}</li>)}</ul></div>}
+              <div><span>禁止照搬的错误</span><ul>{(competitorTitleAnalysis.anti_patterns || []).map(value => <li key={value}>{value}</li>)}</ul></div>
             </div>}
             {!!competitorTerms.length && <div className="competitorTermStudy"><div className="dualPoolHead"><div><span>词池 A · MARKET LANGUAGE</span><h4>头部竞品高频表达</h4><p>按不同竞品标题的出现覆盖率统计；前10个头部竞品获得更高权重。</p></div><em>{competitorTerms.length} 个市场表达</em></div><div className="competitorTermGrid">{competitorTerms.slice(0, 12).map(item => <article key={item.term}><div><b>{item.term}</b><span>{item.coverage_percent}% 竞品覆盖</span></div><small>{item.matched_facts.length ? `匹配本品：${item.matched_facts.join("、")}` : "仅作市场结构参考"} · {item.recommended_placement === "main" ? "建议主标题" : item.recommended_placement === "highlight" ? "建议 Highlight" : "结构参考"}</small></article>)}</div></div>}
             {!!sizeScenarios.length && <div className="scenarioStudy"><h4>不同尺寸的市场场景判断</h4>{sizeScenarios.map(item => <article key={item.size || item.product_type}><div><b>{item.size || "当前尺寸"}</b><span>{item.product_type}</span></div><p>主场景：{item.primary_scenes.join(" / ")}</p><p>辅助场景：{item.secondary_scenes.join(" / ")}</p><small>{item.reasoning}</small></article>)}</div>}
