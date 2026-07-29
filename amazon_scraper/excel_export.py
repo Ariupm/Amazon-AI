@@ -10,7 +10,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image as PILImage
 
-from .models import BatchResult, CompetitorExportRequest
+from .models import BatchResult, CompetitorExportRequest, TitleExportRequest
 
 
 HEADERS = [
@@ -191,6 +191,79 @@ async def build_competitors_xlsx(request: CompetitorExportRequest) -> BytesIO:
     widths = [14, 38, 8, 15, 15, 16, 16, 14, 58, 12, 9, 11, 24, 13, 11, 11, 10, 10, 50, 10, 48, 38]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def build_titles_xlsx(request: TitleExportRequest) -> BytesIO:
+    """Export one auditable title matrix with sizes as the requested column headers."""
+    strategy_names = {"traffic": "流量优先", "click": "点击吸引", "balanced": "均衡转化"}
+    sizes = list(dict.fromkeys(item.size.strip() or "尺寸未识别" for item in request.items))
+    by_size_strategy = {(item.size.strip() or "尺寸未识别", item.strategy): item for item in request.items}
+
+    workbook = Workbook()
+    matrix = workbook.active
+    matrix.title = "按尺寸标题"
+    matrix.append(["标题字段", *sizes])
+    row_specs = [
+        ("主标题（流量优先）", "traffic", "main_title"),
+        ("Item Highlight（流量优先）", "traffic", "highlight_item"),
+        ("完整标题（流量优先）", "traffic", "full_title"),
+        ("主标题（点击吸引）", "click", "main_title"),
+        ("Item Highlight（点击吸引）", "click", "highlight_item"),
+        ("完整标题（点击吸引）", "click", "full_title"),
+        ("主标题（均衡转化）", "balanced", "main_title"),
+        ("Item Highlight（均衡转化）", "balanced", "highlight_item"),
+        ("完整标题（均衡转化）", "balanced", "full_title"),
+    ]
+    for label, strategy, field in row_specs:
+        matrix.append([
+            label,
+            *[
+                getattr(by_size_strategy.get((size, strategy)), field, "") or ""
+                for size in sizes
+            ],
+        ])
+
+    details = workbook.create_sheet("标题明细")
+    details.append([
+        "父体 ASIN", "主推子体 ASIN", "尺寸", "策略", "主标题", "Item Highlight",
+        "完整标题", "评分", "覆盖关键词", "风险提示",
+    ])
+    for item in request.items:
+        details.append([
+            request.parent_asin or "", request.main_child_asin or "", item.size,
+            strategy_names[item.strategy], item.main_title, item.highlight_item or "",
+            item.full_title, item.score, "；".join(item.keywords_used),
+            "；".join(item.warnings),
+        ])
+
+    header_fill = PatternFill("solid", fgColor="173F35")
+    label_fill = PatternFill("solid", fgColor="E8F4EE")
+    for sheet in (matrix, details):
+        for cell in sheet[1]:
+            cell.fill = header_fill
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sheet.freeze_panes = "B2"
+        sheet.row_dimensions[1].height = 28
+        for row in sheet.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for row_index in range(2, matrix.max_row + 1):
+        matrix.cell(row_index, 1).fill = label_fill
+        matrix.cell(row_index, 1).font = Font(bold=True, color="173F35")
+        matrix.row_dimensions[row_index].height = 60
+    matrix.column_dimensions["A"].width = 30
+    for column in range(2, matrix.max_column + 1):
+        matrix.column_dimensions[get_column_letter(column)].width = 52
+    detail_widths = [15, 15, 16, 12, 54, 54, 70, 9, 42, 44]
+    for index, width in enumerate(detail_widths, start=1):
+        details.column_dimensions[get_column_letter(index)].width = width
+    details.auto_filter.ref = f"A1:J{details.max_row}"
 
     output = BytesIO()
     workbook.save(output)

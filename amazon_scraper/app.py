@@ -13,16 +13,16 @@ from .models import (
     BatchItemResult, BatchResult, BatchScrapeRequest, CompetitorDiscoverRequest,
     CompetitorDiscoverResult, CompetitorExportRequest, CompetitorPlanRequest,
     CompetitorPlanResult, KeywordFileSummary,
-    ScrapeRequest, TitleGenerateRequest, TitleGenerateResult,
+    ScrapeRequest, TitleExportRequest, TitleGenerateRequest, TitleGenerateResult,
 )
 from .competitors import build_competitor_plan, discover_competitors
-from .excel_export import build_competitors_xlsx, build_products_xlsx
+from .excel_export import build_competitors_xlsx, build_products_xlsx, build_titles_xlsx
 from .keyword_files import inspect_keyword_file, inspect_negative_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 from .title_generator import generate_titles
 
-FEATURE_VERSION = "dual-keyword-pools-v19"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.19.0")
+FEATURE_VERSION = "parent-size-title-batch-v20"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.20.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -201,3 +201,13 @@ async def title_generation(request: TitleGenerateRequest) -> TitleGenerateResult
 @app.post("/api/titles/plan", response_model=TitleGenerateResult)
 async def title_keyword_plan(request: TitleGenerateRequest) -> TitleGenerateResult:
     return generate_titles(request)
+
+
+@app.post("/api/titles/export/xlsx")
+async def export_titles_xlsx(request: TitleExportRequest) -> StreamingResponse:
+    workbook = build_titles_xlsx(request)
+    return StreamingResponse(
+        workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="amazon-size-titles.xlsx"'},
+    )

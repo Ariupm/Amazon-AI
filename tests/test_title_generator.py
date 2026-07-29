@@ -141,6 +141,26 @@ class TitleGeneratorTests(unittest.TestCase):
         self.assertTrue(any("boho runner rug" in item.term for item in result.competitor_terms))
         self.assertTrue(any(item.coverage_percent == 100 for item in result.competitor_terms))
 
+    def test_parent_batch_uses_size_specific_competitor_titles(self):
+        result = generate_titles(TitleGenerateRequest(
+            brand="GENIMO",
+            product_title="GENIMO Washable Vintage Area Rug",
+            competitor_titles=["BrandA Washable Vintage Area Rug"],
+            competitor_titles_by_size={
+                "2' x 6'": ["BrandB Vintage Runner Rug for Hallway", "BrandC Boho Runner Rug"],
+                "8' x 10'": ["BrandD Vintage Area Rug for Living Room", "BrandE Large Area Rug"],
+            },
+            keywords=[
+                KeywordEntry(term="runner rug", volume=50000),
+                KeywordEntry(term="area rugs for living room", volume=80000),
+            ],
+            category="Area Rug",
+            style="Vintage",
+            sizes=["2' x 6'", "8' x 10'"],
+        ))
+        self.assertEqual({item.size for item in result.candidates}, {"2' x 6'", "8' x 10'"})
+        self.assertTrue(any("参考 2 个同尺寸" in evidence for item in result.candidates for evidence in item.keyword_evidence))
+
 
 if __name__ == "__main__":
     unittest.main()

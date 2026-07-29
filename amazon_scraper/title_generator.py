@@ -414,7 +414,23 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
     for color in colors:
         for size, scenario in zip(sizes, scenarios):
             category = scenario.product_type
+            title_size = None if (size or "").strip().lower() in {"尺寸未识别", "unknown", "n/a"} else size
             styles = _style_parts(request.style)
+            size_competitor_titles = request.competitor_titles_by_size.get(size or "", [])
+            size_competitor_terms = _competitor_terms(
+                request.model_copy(update={
+                    "competitor_titles": size_competitor_titles or request.competitor_titles,
+                }),
+                features,
+            )
+            size_market_phrase = next(
+                (
+                    item.term for item in size_competitor_terms
+                    if item.recommended_placement == "main"
+                    and re.search(r"\b(?:area|runner|accent)\s+rugs?\b", item.term, re.I)
+                ),
+                None,
+            )
             main_terms = selected_keywords["main"]
             highlight_terms = selected_keywords["highlight"]
             primary_keyword = next(
@@ -430,16 +446,18 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 brand,
                 _display_phrase(primary_keyword.term) if primary_keyword else category,
                 _display_phrase(scene_keyword.term) if scene_keyword and scene_keyword is not primary_keyword else None,
-                *styles[:1], size, color, *features[:2],
+                *styles[:1], title_size, color, *features[:2],
             ]
             click_parts = [
                 brand, features[0] if features else request.style,
                 _display_phrase(primary_keyword.term) if primary_keyword else category,
-                *styles[:2], size, color, *features[1:3],
+                *styles[:2], title_size, color, *features[1:3],
             ]
             balanced_parts = [
                 brand, _display_phrase(primary_keyword.term) if primary_keyword else category,
-                *keyword_parts[1:2], *styles[:1], *features[:2], color, size,
+                *keyword_parts[1:2],
+                _display_phrase(size_market_phrase) if size_market_phrase else None,
+                *styles[:1], *features[:2], color, title_size,
             ]
             structures = [
                 ("traffic", traffic_parts),
@@ -481,6 +499,10 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                     if item.volume is not None else f"{item.term} · 流量未知"
                     for item in [*main_terms, *highlight_terms][:8]
                 ]
+                if size_competitor_titles:
+                    evidence.append(
+                        f"{size or '当前尺寸'} · 参考 {len(size_competitor_titles)} 个同尺寸/近似尺寸竞品标题"
+                    )
                 warnings: list[str] = []
                 if not keyword_analysis:
                     warnings.append("最新词库中没有通过类目、属性与尺寸场景校验的候选词，请人工检查类目词。")
@@ -517,6 +539,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
             "广告词、流量词与标题埋词服从相关性和可读性，同义词不重复堆叠",
             "高流量且事实、尺寸场景匹配的场景词允许进入主标题，并尽量保留完整搜索短语",
             "优先参考前10个已锁定头部竞品的信息顺序；普通文案少用连接词，流量短语中的 for 可保留",
+            "父体批量优化时，先按尺寸匹配竞品标题；同尺寸证据不足才回退到全体已锁定竞品",
             "主标题不超过 75 字符，Highlight Item 使用完整自然句且不超过 125 字符",
         ],
     )

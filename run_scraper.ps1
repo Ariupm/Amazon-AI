@@ -6,7 +6,7 @@ $webPort = 3000
 $healthUrl = "http://127.0.0.1:$port/health"
 $openApiUrl = "http://127.0.0.1:$port/openapi.json"
 $pageUrl = "http://localhost:$webPort/titles"
-$requiredFeatureVersion = "dual-keyword-pools-v19"
+$requiredFeatureVersion = "parent-size-title-batch-v20"
 
 function Get-ListenerProcessId {
     $connection = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
@@ -106,7 +106,7 @@ try {
         }
     }
     Start-Process $pageUrl
-    Write-Host "标题工作台 V19 与真实抓取器已在本机启动。关闭此窗口可停止服务。" -ForegroundColor Green
+    Write-Host "标题工作台 V20 与真实抓取器已在本机启动。关闭此窗口可停止服务。" -ForegroundColor Green
     Wait-Process -Id $server.Id
 } finally {
     if (Get-Process -Id $server.Id -ErrorAction SilentlyContinue) {

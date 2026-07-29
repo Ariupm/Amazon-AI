@@ -277,6 +277,7 @@ class TitleGenerateRequest(BaseModel):
     product_title: str
     bullets: list[str] = Field(default_factory=list, max_length=20)
     competitor_titles: list[str] = Field(default_factory=list, max_length=100)
+    competitor_titles_by_size: dict[str, list[str]] = Field(default_factory=dict)
     keywords: list[KeywordEntry] = Field(default_factory=list, max_length=10_000)
     keyword_selections: list[TitleKeywordSelection] = Field(default_factory=list, max_length=100)
     negative_terms: list[str] = Field(default_factory=list, max_length=10_000)
@@ -358,3 +359,22 @@ class TitleGenerateResult(BaseModel):
     competitor_analysis: CompetitorTitleAnalysis
     competitor_terms: list[CompetitorTermAnalysis] = Field(default_factory=list)
     rules: list[str] = Field(default_factory=list)
+
+
+class TitleExportItem(BaseModel):
+    asin: str | None = None
+    size: str
+    strategy: Literal["traffic", "click", "balanced"]
+    main_title: str
+    highlight_item: str | None = None
+    full_title: str
+    score: int = 0
+    keywords_used: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TitleExportRequest(BaseModel):
+    parent_asin: str | None = None
+    main_child_asin: str | None = None
+    title_format: Literal["classic", "split"] = "split"
+    items: list[TitleExportItem] = Field(min_length=1, max_length=300)
