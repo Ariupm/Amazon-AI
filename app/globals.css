@@ -247,5 +247,44 @@ footer{height:70px;border-top:1px solid #e5eae7;display:flex;justify-content:spa
 @media(max-width:850px){.researchInputs{grid-template-columns:1fr 1fr}}
 @media(max-width:850px){.variantChoiceGrid{grid-template-columns:1fr 1fr}}
 @media(max-width:520px){.variantChoiceGrid{grid-template-columns:1fr}.parentVariantHead,.titleExportBar{align-items:stretch;flex-direction:column}.parentVariantHead>div:last-child{border-left:0;border-top:1px solid #d3e1db;padding-top:10px}}
+
+/* V20 interaction polish: task choice, optimization scope and ASIN primary action */
+.taskPanel{gap:16px}
+.taskChoices{gap:12px}
+.taskChoices>button{position:relative;min-height:168px;padding:20px 20px 18px;display:flex;flex-direction:column;align-items:flex-start;gap:9px;overflow:hidden;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease}
+.taskChoices>button:hover{border-color:#9fc8b8;box-shadow:0 10px 24px rgba(24,76,61,.07);transform:translateY(-1px)}
+.taskChoices>button>span{grid-row:auto;display:inline-flex;align-items:center;width:auto;min-height:0;border-radius:999px;padding:5px 9px;font-size:10px;letter-spacing:.04em}
+.taskChoices>button>b{font-size:17px;line-height:1.3;letter-spacing:-.02em;padding-right:28px}
+.taskChoices>button>p{grid-column:auto;margin:0;font-size:12px;line-height:1.65;color:#6a7974}
+.taskChoices>button::after{content:"";position:absolute;right:17px;top:19px;width:18px;height:18px;border:1px solid #cfdad5;border-radius:50%;background:#fff}
+.taskChoices>button.selected{background:linear-gradient(145deg,#f3fbf7,#edf8f3);box-shadow:0 8px 22px rgba(8,119,94,.08),inset 0 0 0 1px #08775e}
+.taskChoices>button.selected::after{border:5px solid #08775e;width:10px;height:10px}
+
+.asinSource{padding:18px;background:#fff}
+.asinSource>.optimizeScopeSwitch{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;border:1px solid #dce7e2;border-radius:13px;background:#f3f7f5;margin-bottom:18px}
+.optimizeScopeSwitch button{min-height:62px;display:grid!important;grid-template-columns:1fr!important;justify-items:start!important;align-content:center!important;gap:4px!important;padding:10px 14px!important;border-color:transparent!important;background:transparent!important}
+.optimizeScopeSwitch button b{font-size:12px;line-height:1.2}
+.optimizeScopeSwitch button small{font-size:9px;color:#73817c}
+.optimizeScopeSwitch button.selected{background:#fff!important;border-color:#b9d9cc!important;box-shadow:0 5px 14px rgba(28,74,61,.08)!important}
+.optimizeScopeSwitch button.selected::before{content:"✓";position:absolute;right:12px;color:#08775e;font-weight:900}
+.optimizeScopeSwitch button{position:relative}
+.asinSource>label{font-size:11px;color:#253832;margin-bottom:8px}
+.asinSource .asinActionRow{display:grid;grid-template-columns:minmax(220px,1fr) 120px 180px;gap:10px;align-items:stretch}
+.asinSource .asinActionRow input,.asinSource .asinActionRow select{min-height:48px;border-radius:10px;font-size:13px}
+.asinSource .asinActionRow input{font-size:16px;font-weight:750;letter-spacing:.025em;padding-inline:14px}
+.asinSource .readProductButton{display:flex;align-items:center;justify-content:center;min-width:180px;min-height:48px;padding:0 18px;border-radius:10px;background:#08775e;color:#fff;font-size:12px;box-shadow:0 8px 18px rgba(8,119,94,.18);white-space:nowrap;cursor:pointer;transition:background .18s ease,transform .18s ease}
+.asinSource .readProductButton:hover{background:#06654f;transform:translateY(-1px)}
+.asinSource .readProductButton:disabled{opacity:.65;cursor:wait;transform:none}
+
+.titleFormatRow{margin-top:16px;padding:14px;border:1px solid #dce7e2;border-radius:14px;background:#f7faf8;grid-template-columns:.8fr 1fr 1fr}
+.titleFormatRow>div{padding:4px 8px}.titleFormatRow>div b{font-size:13px}.titleFormatRow>div span{font-size:10px;margin-top:5px}
+.titleFormatRow>button{position:relative;min-height:74px;padding:14px 42px 14px 16px;gap:6px}
+.titleFormatRow>button b{font-size:13px}.titleFormatRow>button small{font-size:10px;line-height:1.4}
+.titleFormatRow>button::after{content:"";position:absolute;right:15px;top:50%;width:17px;height:17px;border:1px solid #cbd7d1;border-radius:50%;transform:translateY(-50%);background:#fff}
+.titleFormatRow>button.selected{background:#fff;box-shadow:0 6px 16px rgba(8,119,94,.08),inset 0 0 0 1px #08775e}
+.titleFormatRow>button.selected::after{width:9px;height:9px;border:5px solid #08775e}
+
+@media(max-width:900px){.asinSource .asinActionRow{grid-template-columns:1fr 120px}.asinSource .readProductButton{grid-column:1/-1}}
+@media(max-width:600px){.asinSource .asinActionRow{grid-template-columns:1fr}.asinSource .readProductButton{grid-column:auto;width:100%}.asinSource>.optimizeScopeSwitch{grid-template-columns:1fr}.taskChoices>button{min-height:auto}.titleFormatRow{padding:10px}}
 @media(max-width:850px){.competitorWritingStudy,.scenarioStudy,.painInsightList{grid-template-columns:1fr}.competitorTermGrid{grid-template-columns:1fr 1fr}.scenarioStudy h4{grid-column:auto}.keywordTable{overflow-x:auto}.keywordRow{min-width:760px}.painStudyHead{align-items:flex-start;flex-direction:column}.painSummary{grid-template-columns:repeat(3,1fr)}.painSummary p{grid-column:1/-1;margin:0}}@media(max-width:560px){.painStudyActions{width:100%;align-items:stretch;flex-direction:column}.painSummary,.competitorTermGrid{grid-template-columns:1fr}.painSummary p{grid-column:auto}.painInsightList{padding:11px}}
 @media(max-width:520px){.researchInputs{grid-template-columns:1fr}.generateAction{align-items:stretch;flex-direction:column}.generateAction button{width:100%}.researchReportHead,.keywordStudyHead{align-items:flex-start;flex-direction:column}}
