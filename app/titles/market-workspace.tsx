@@ -62,7 +62,10 @@ type SearchPlan = {
   features: string[]; guidance: string[];
 };
 type WeightedQuery = { query: string; weight: number; enabled: boolean };
-type PainInsight = { phrase: string; mentions: number; evidence: string[]; improvement: string; confirmed: boolean };
+type PainInsight = {
+  phrase: string; mentions: number; evidence: string[]; sourcePhrases: string[];
+  improvement: string; confirmed: boolean; selected: boolean; example: string;
+};
 
 const uploadGuides = [
   { key: "aba", name: "ABA 综合词库", desc: "必填；可以直接包含每月补充的卖家精灵预测搜索量。", accept: ".xlsx,.csv" },
@@ -602,17 +605,41 @@ export default function MarketWorkspace() {
       });
       const batch = await response.json();
       if (!response.ok) throw new Error(batch.detail || "竞品评论读取失败");
-      const merged = new Map<string, PainInsight>();
+      const rawPains: {phrase:string;mentions:number;evidence:string[]}[] = [];
       for (const item of batch.items || []) {
         for (const pain of item.result?.insights?.pains || []) {
-          const key = pain.phrase.toLowerCase();
-          const current = merged.get(key) || { phrase: pain.phrase, mentions: 0, evidence: [], improvement: "", confirmed: false };
-          current.mentions += pain.mentions || 0;
-          current.evidence = [...current.evidence, ...(pain.evidence || [])].slice(0, 3);
-          merged.set(key, current);
+          rawPains.push({ phrase: pain.phrase, mentions: pain.mentions || 0, evidence: pain.evidence || [] });
         }
       }
-      const insights = [...merged.values()].sort((a, b) => b.mentions - a.mentions).slice(0, 20);
+      const themes = [
+        { key:"slip", label:"防滑与安全风险", pattern:/\b(slip|slid|slide|sliding|trip|tripped|dangerous|moves?|moving)\b/i, example:"例如 Reinforced Non-Slip Backing" },
+        { key:"thin", label:"轻薄、软塌或不平整", pattern:/\b(thin|flimsy|crease|curl|curled|flat|wrinkle|fold)\b/i, example:"例如 Lay-Flat Construction / Reinforced Body" },
+        { key:"print", label:"图案、颜色与实物差异", pattern:/\b(print|printed|color|colour|fade|faded|pattern|beautiful|picture|photo)\b/i, example:"例如 High-Definition Print / Colorfast Surface" },
+        { key:"texture", label:"触感与表面质感", pattern:/\b(soft|rough|stiff|stuffed|texture|plush)\b/i, example:"例如 Soft Faux-Wool Surface" },
+        { key:"durability", label:"耐用性、掉毛与边缘问题", pattern:/\b(shed|shedding|edge|fray|frayed|tear|torn|durable|durability)\b/i, example:"例如 Reinforced Edges / Non-Shedding Surface" },
+        { key:"clean", label:"清洁与机洗表现", pattern:/\b(wash|washed|washing|clean|stain|dryer|drying)\b/i, example:"例如 Machine Washable / Stain-Resistant" },
+        { key:"size", label:"尺寸与覆盖范围偏差", pattern:/\b(size|small|smaller|large|larger|short|narrow)\b/i, example:"例如 Accurate Size Labeling" },
+        { key:"odor", label:"气味与包装体验", pattern:/\b(smell|odor|odour|chemical|package|packaging)\b/i, example:"例如 Low-Odor Material / Improved Packaging" },
+      ];
+      const grouped = new Map<string, {label:string;example:string;phrases:Set<string>;evidence:Set<string>;mentions:number}>();
+      for (const pain of rawPains) {
+        const corpus = `${pain.phrase} ${pain.evidence.join(" ")}`;
+        const theme = themes.find(item => item.pattern.test(corpus));
+        const key = theme?.key || `other:${pain.phrase.toLowerCase()}`;
+        const current = grouped.get(key) || {
+          label: theme?.label || pain.phrase, example: theme?.example || "填写我方已实现的具体改进",
+          phrases: new Set<string>(), evidence: new Set<string>(), mentions: 0,
+        };
+        current.phrases.add(pain.phrase);
+        pain.evidence.forEach(value => current.evidence.add(value));
+        current.mentions = Math.max(current.mentions, pain.mentions || 0, current.evidence.size);
+        grouped.set(key, current);
+      }
+      const insights: PainInsight[] = [...grouped.values()].map(item => ({
+        phrase:item.label, mentions:item.mentions, evidence:[...item.evidence].slice(0, 5),
+        sourcePhrases:[...item.phrases].slice(0, 6), improvement:"", confirmed:false,
+        selected:false, example:item.example,
+      })).sort((a, b) => b.mentions - a.mentions).slice(0, 12);
       setPainInsights(insights);
       setMessage(`已从 ${batch.succeeded || 0} 个竞品提取 ${insights.length} 个痛点；只有确认我方改进及证据后才会参与标题。`);
     } catch (error) {
@@ -744,8 +771,10 @@ export default function MarketWorkspace() {
           {message && <div className="marketMessage">{message}</div>}
           {candidates.length ? <><div className="candidateToolbar"><span>共 {candidates.length} 个候选 · 市场价值优先排序 · 第 {candidatePage}/{candidatePages} 页</span><div><button onClick={() => exportCompetitors("selected")} disabled={loading === "export"}>导出已选 XLSX</button><button onClick={() => exportCompetitors("all")} disabled={loading === "export"}>导出全部 XLSX</button></div></div><div className="candidateGrid">{visibleCandidates.map(item => <article className={item.selected ? "candidate selected" : "candidate"} key={item.asin}>{item.image ? <img src={item.image} alt="" /> : <div className="noCandidateImage">无图</div>}<div><div className="candidateMeta"><a href={item.url} target="_blank">{item.asin} ↗</a><span>{item.source === "manual" ? "人工添加" : `产品相似度 ${item.overall_similarity ?? "—"}分`}</span></div><div className="candidateIdentity"><b>{item.brand || "品牌未识别"}</b><span>{item.size || "尺寸未识别"}</span>{item.parent_asin && <span>父体 {item.parent_asin}</span>}</div><h4>{item.title}</h4><p>{item.price || "价格未知"} · ★ {item.rating ?? "—"} · {item.recent_sales_signal || "月销量未知"}{item.monthly_sales_estimate ? `（按 ${item.monthly_sales_estimate.toLocaleString()} 排序）` : ""}</p>{item.source !== "manual" && <><div className="scoreBreakdown"><span>产品类型 {item.product_type_similarity ?? "—"}</span><span>属性 {item.attribute_similarity ?? "—"}</span><span>标题证据 {item.text_similarity ?? "—"}</span><span title={item.visual_reason || ""}>视觉 {item.image_similarity ?? "—"} · {item.visual_images_compared || 0} 组</span><span>市场价值 {item.market_value ?? item.market_similarity ?? "—"}</span></div><p className="visualReason">{item.visual_reason}</p><p className="matchReasons">{item.match_reasons?.join(" · ") || "等待人工核验"}</p></>}<label><input type="checkbox" checked={!!item.selected} onChange={() => setCandidates(current => current.map(value => value.asin === item.asin ? {...value, selected:!value.selected} : value))} />纳入竞品研究</label></div></article>)}</div><div className="candidatePagination"><button disabled={candidatePage <= 1} onClick={() => setCandidatePage(page => page - 1)}>← 上一页</button><span>{candidatePage} / {candidatePages}</span><button disabled={candidatePage >= candidatePages} onClick={() => setCandidatePage(page => page + 1)}>下一页 →</button></div></> : <div className="candidateEmpty"><b>{searchPlan ? "等待确认搜索方案" : "还没有竞品搜索方案"}</b><span>{searchPlan ? "核对上方产品类型、直接竞品定义、搜索词和排除项，再点击“确认方案并搜索竞品”。" : "先准备本品资料，再点击“生成搜索方案”；系统不会立即访问 Amazon。"}</span></div>}
           {candidates.length > 0 && <div className="confirmCompetitors"><div><span>已选择 <b>{selected.length}</b> 个竞品</span>{confirmMessage && <small className={confirmed ? "confirmSuccess" : "confirmError"}>{confirmMessage}</small>}</div><button className={confirmed ? "locked" : ""} onClick={lockCompetitors}>{confirmed ? `✓ 已锁定 ${selected.length} 个竞品` : "确认竞品并锁定本轮研究"}</button></div>}
-          {confirmed && <div className="reviewPainStudy"><div className="panelHead"><div><h3>可选：竞品评论痛点与我方改进</h3><p>评论只用于发现需求。必须填写并确认我方真实改进，才允许作为标题卖点候选。</p></div><div><select value={reviewCompetitorLimit} onChange={event => setReviewCompetitorLimit(Number(event.target.value))}><option value={5}>前5个头部竞品</option><option value={10}>前10个头部竞品</option><option value={20}>前20个头部竞品</option></select><button onClick={analyzeCompetitorReviews} disabled={loading === "reviews"}>{loading === "reviews" ? "分析评论中…" : "提取低星评论痛点"}</button></div></div>
-            {!!painInsights.length && <div className="painInsightList">{painInsights.map((item, index) => <article key={item.phrase}><div><b>{item.phrase}</b><span>{item.mentions} 次提及</span></div><small title={item.evidence.join("\n")}>{item.evidence[0] || "暂无原句"}</small><input value={item.improvement} onChange={event => setPainInsights(current => current.map((value, currentIndex) => currentIndex === index ? {...value, improvement:event.target.value, confirmed:false} : value))} placeholder="填写我方已实现的改进，例如 Reinforced Non-Slip Backing" /><label><input type="checkbox" checked={item.confirmed} disabled={!item.improvement.trim()} onChange={event => setPainInsights(current => current.map((value, currentIndex) => currentIndex === index ? {...value, confirmed:event.target.checked} : value))} />已核对产品资料，确认我方具备该改进</label></article>)}</div>}
+          {confirmed && <div className="reviewPainStudy"><div className="painStudyHead"><div><span className="sectionEyebrow">REVIEW INSIGHTS · 可选</span><h3>竞品差评中，买家最在意什么？</h3><p>先看聚合后的痛点主题；只处理我方确实已经改进的部分。</p></div><div className="painStudyActions"><select aria-label="评论分析竞品范围" value={reviewCompetitorLimit} onChange={event => setReviewCompetitorLimit(Number(event.target.value))}><option value={5}>前5个头部竞品</option><option value={10}>前10个头部竞品</option><option value={20}>前20个头部竞品</option></select><button onClick={analyzeCompetitorReviews} disabled={loading === "reviews"}>{loading === "reviews" ? "正在归纳评论…" : painInsights.length ? "重新分析评论" : "提取低星评论痛点"}</button></div></div>
+            {!!painInsights.length && <><div className="painSummary"><div><span>痛点主题</span><b>{painInsights.length}</b></div><div><span>评论证据</span><b>{painInsights.reduce((sum, item) => sum + item.evidence.length, 0)}</b></div><div><span>已确认改进</span><b>{painInsights.filter(item => item.confirmed).length}</b></div><p>系统已合并重复短语；评论原句默认折叠，不再用零散词组刷屏。</p></div>
+              <div className="painInsightList">{painInsights.map((item, index) => <article className={`${item.selected ? "active" : ""} ${item.confirmed ? "confirmed" : ""}`} key={item.phrase}><div className="painCardTop"><div><span className="painRank">#{index + 1}</span><div><b>{item.phrase}</b><small>{item.sourcePhrases?.join(" · ") || "评论痛点主题"}</small></div></div><em>{item.mentions} 条证据</em></div><details><summary>查看评论原句</summary>{item.evidence.map(value => <blockquote key={value}>{value}</blockquote>)}</details><button className="painSelectButton" onClick={() => setPainInsights(current => current.map((value, currentIndex) => currentIndex === index ? {...value, selected:!value.selected, confirmed:value.selected ? false : value.confirmed} : value))}>{item.selected ? "收起改进验证" : "我方已针对该问题改进 →"}</button>{item.selected && <div className="painImprovement"><label>我方已实现的改进<input value={item.improvement} onChange={event => setPainInsights(current => current.map((value, currentIndex) => currentIndex === index ? {...value, improvement:event.target.value, confirmed:false} : value))} placeholder={item.example || "填写我方已实现的具体改进"} /></label><label className="painConfirm"><input type="checkbox" checked={item.confirmed} disabled={!item.improvement.trim()} onChange={event => setPainInsights(current => current.map((value, currentIndex) => currentIndex === index ? {...value, confirmed:event.target.checked} : value))} /><span><b>事实确认</b>我已核对产品资料，本品确实具备该改进</span></label></div>}</article>)}</div>
+            </>}
           </div>}
         </article>
         <article className="panel uploadPanel" id="keyword-materials">
