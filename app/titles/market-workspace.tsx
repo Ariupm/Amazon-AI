@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "title-traffic-v16";
+const REQUIRED_BACKEND = "review-sentiment-v17";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
