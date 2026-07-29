@@ -358,6 +358,16 @@ class CompetitorTermAnalysis(BaseModel):
     recommended_placement: Literal["main", "highlight", "reference"] = "reference"
 
 
+class SizeCompetitorStudy(BaseModel):
+    size: str
+    sample_size: int = 0
+    dominant_formula: str
+    formula_coverage_percent: int = 0
+    frequent_terms: list[CompetitorTermAnalysis] = Field(default_factory=list)
+    aba_terms: list[TitleKeywordAnalysis] = Field(default_factory=list)
+    note: str
+
+
 class TitleGenerateResult(BaseModel):
     candidates: list[TitleCandidate]
     traffic_keywords: list[KeywordEntry] = Field(default_factory=list)
@@ -365,6 +375,8 @@ class TitleGenerateResult(BaseModel):
     size_scenarios: list[SizeScenarioAnalysis] = Field(default_factory=list)
     competitor_analysis: CompetitorTitleAnalysis
     competitor_terms: list[CompetitorTermAnalysis] = Field(default_factory=list)
+    semantic_clusters: list[str] = Field(default_factory=list)
+    size_competitor_studies: list[SizeCompetitorStudy] = Field(default_factory=list)
     rules: list[str] = Field(default_factory=list)
 
 

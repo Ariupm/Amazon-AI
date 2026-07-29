@@ -161,6 +161,13 @@ class TitleGeneratorTests(unittest.TestCase):
         ))
         self.assertEqual({item.size for item in result.candidates}, {"2' x 6'", "8' x 10'"})
         self.assertTrue(any("参考 2 个同尺寸" in evidence for item in result.candidates for evidence in item.keyword_evidence))
+        self.assertEqual(len(result.size_competitor_studies), 2)
+        runner_study = next(item for item in result.size_competitor_studies if item.size == "2' x 6'")
+        large_study = next(item for item in result.size_competitor_studies if item.size == "8' x 10'")
+        self.assertEqual(runner_study.sample_size, 2)
+        self.assertEqual(large_study.sample_size, 2)
+        self.assertIn("runner", " ".join(item.term for item in runner_study.frequent_terms).lower())
+        self.assertTrue(runner_study.aba_terms)
 
     def test_semantic_claims_never_repeat_across_split_title(self):
         result = generate_titles(TitleGenerateRequest(
@@ -183,7 +190,7 @@ class TitleGeneratorTests(unittest.TestCase):
                 TitleKeywordSelection(term="hallway rugs indoor non slip", placement="highlight"),
             ],
             category="Runner Rug", style="Boho", use_case="Hallway, Kitchen",
-            must_have=["Washable", "Non-Slip", "Soft"], sizes=["2' x 6'"],
+            must_have=["Washable", "Non-Slip", "Soft", "Rubber Backing"], sizes=["2' x 6'"],
         ))
         for item in result.candidates:
             normalized = item.full_title.lower().replace("-", " ")
@@ -194,6 +201,8 @@ class TitleGeneratorTests(unittest.TestCase):
             self.assertEqual(len(re.findall(r"\bwashable\b", normalized)), 1)
         self.assertTrue(result.competitor_analysis.dominant_formula)
         self.assertTrue(result.competitor_analysis.position_insights)
+        self.assertTrue(any("Non Slip = Non Skid" in item for item in result.semantic_clusters))
+        self.assertTrue(any("Rubber Backing（独立属性" in item for item in result.semantic_clusters))
 
 
 if __name__ == "__main__":

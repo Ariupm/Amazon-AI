@@ -77,7 +77,7 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /同品牌合并/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
-  assert.match(workspace, /structured-title-dedupe-v21/);
+  assert.match(workspace, /size-specific-title-study-v23/);
   assert.match(workspace, /最终候选上限/);
   assert.match(workspace, /本轮候选漏斗/);
   assert.match(workspace, /verify_detail_pages/);
@@ -108,7 +108,7 @@ test("renders child bullets with a product fallback", async () => {
 
 test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
-  assert.match(launcher, /structured-title-dedupe-v21/);
+  assert.match(launcher, /size-specific-title-study-v23/);
   assert.match(launcher, /检测到旧版抓取器/);
   assert.match(launcher, /netstat -ano/);
   assert.match(launcher, /Get-ListenerProcessId/);

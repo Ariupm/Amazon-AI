@@ -8,6 +8,7 @@ from .models import (
     CompetitorTermAnalysis,
     CompetitorTitleAnalysis,
     KeywordEntry,
+    SizeCompetitorStudy,
     SizeScenarioAnalysis,
     TitleCandidate,
     TitleGenerateRequest,
@@ -50,7 +51,7 @@ SCENE_WORDS = {
     "living room", "bedroom", "dining room", "kitchen", "hallway",
     "entryway", "nursery", "home office", "bathroom", "laundry room",
 }
-SEMANTIC_CLAIMS = {
+BASE_CLAIM_ALIASES = {
     "non_slip": r"\b(?:non[- ]?slip|non[- ]?skid|anti[- ]?slip)\b",
     "washable": r"\b(?:machine[- ]?washable|washable)\b",
     "soft": r"\b(?:ultra[- ]?soft|super[- ]?soft|soft)\b",
@@ -163,8 +164,8 @@ def _features(request: TitleGenerateRequest) -> list[str]:
         -competitor_corpus.count(label.lower().replace("-", " ")),
         original_order[label],
     ))
-    for improvement in request.verified_improvements:
-        label = re.sub(r"\s+", " ", improvement).strip(" ,|-")
+    for verified in [*request.must_have, *request.verified_improvements]:
+        label = re.sub(r"\s+", " ", verified).strip(" ,|-")
         if label and label.lower() not in {item.lower() for item in found}:
             found.append(label)
     return found
@@ -397,12 +398,62 @@ def _competitor_analysis(request: TitleGenerateRequest, features: list[str]) -> 
     )
 
 
-def _dedupe_semantic_part(raw: str | None, used_claims: set[str]) -> str:
+def _flexible_phrase_pattern(value: str) -> str:
+    words = re.findall(r"[A-Za-z0-9]+", value.lower())
+    return r"\b" + r"[-\s]+".join(re.escape(word) for word in words) + r"\b" if words else ""
+
+
+def _semantic_claim_patterns(
+    request: TitleGenerateRequest,
+    features: list[str],
+) -> tuple[dict[str, str], list[str]]:
+    """Build claim clusters from verified facts for this run, plus safe synonym aliases."""
+    patterns = dict(BASE_CLAIM_ALIASES)
+    corpus = " ".join([
+        request.product_title, *request.bullets, *request.must_have,
+        *request.verified_improvements, request.material or "", request.style or "",
+        request.use_case or "", *[item.term for item in request.keywords],
+    ])
+    displayed: list[str] = []
+    alias_labels = {
+        "non_slip": "Non Slip = Non Skid = Anti-Slip",
+        "washable": "Machine Washable ⊂ Washable",
+        "soft": "Ultra Soft / Super Soft ⊂ Soft",
+        "low_pile": "Low Pile = Thin Pile",
+    }
+    for key, label in alias_labels.items():
+        if re.search(patterns[key], corpus, re.I):
+            displayed.append(label)
+    verified_values = [
+        *features, *request.must_have, *request.verified_improvements,
+        *re.split(r"[,/|;，]+", request.material or ""),
+        *re.split(r"[,/|;，]+", request.style or ""),
+    ]
+    for value in verified_values:
+        phrase = re.sub(r"\s+", " ", value).strip(" ,.|-")
+        if len(phrase) < 3:
+            continue
+        if any(re.search(pattern, phrase, re.I) for pattern in patterns.values()):
+            continue
+        pattern = _flexible_phrase_pattern(phrase)
+        if not pattern:
+            continue
+        key = "fact_" + "_".join(sorted(_tokens(phrase)))
+        patterns[key] = pattern
+        displayed.append(f"{phrase}（独立属性，不与其他卖点合并）")
+    return patterns, list(dict.fromkeys(displayed))
+
+
+def _dedupe_semantic_part(
+    raw: str | None,
+    used_claims: set[str],
+    claim_patterns: dict[str, str],
+) -> str:
     part = re.sub(r"\s+", " ", raw or "").strip(" ,.|-")
     if not part:
         return ""
     normalized = part
-    for claim, pattern in SEMANTIC_CLAIMS.items():
+    for claim, pattern in claim_patterns.items():
         if not re.search(pattern, normalized, re.I):
             continue
         if claim in used_claims:
@@ -414,11 +465,11 @@ def _dedupe_semantic_part(raw: str | None, used_claims: set[str]) -> str:
     return normalized.strip(" ,.|-")
 
 
-def _join_main(parts: list[str | None], limit: int) -> str:
+def _join_main(parts: list[str | None], limit: int, claim_patterns: dict[str, str]) -> str:
     result = ""
     used_claims: set[str] = set()
     for raw in parts:
-        part = _dedupe_semantic_part(raw, used_claims)
+        part = _dedupe_semantic_part(raw, used_claims, claim_patterns)
         if not part or part.lower() in result.lower():
             continue
         proposed = f"{result}, {part}" if result else part
@@ -438,14 +489,20 @@ def _keyword_scene(value: str) -> str | None:
     return next((_display_phrase(scene) for scene in SCENE_WORDS if scene in lower), None)
 
 
-def _compact_highlight(parts: list[str], limit: int = 125, existing: str = "") -> str:
+def _compact_highlight(
+    parts: list[str],
+    limit: int = 125,
+    existing: str = "",
+    claim_patterns: dict[str, str] | None = None,
+) -> str:
     result = ""
+    claim_patterns = claim_patterns or BASE_CLAIM_ALIASES
     used_claims = {
-        claim for claim, pattern in SEMANTIC_CLAIMS.items()
+        claim for claim, pattern in claim_patterns.items()
         if re.search(pattern, existing, re.I)
     }
     for raw in parts:
-        part = _dedupe_semantic_part(raw, used_claims)
+        part = _dedupe_semantic_part(raw, used_claims, claim_patterns)
         if not part or part.lower() in result.lower():
             continue
         proposed = f"{result}, {part}" if result else part
@@ -494,6 +551,39 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
         for item in keyword_analysis
     ]
     competitor_analysis = _competitor_analysis(request, features)
+    claim_patterns, semantic_clusters = _semantic_claim_patterns(request, features)
+    size_contexts: dict[str, tuple[
+        list[str], list[CompetitorTermAnalysis], list[TitleKeywordAnalysis],
+        dict[str, list[TitleKeywordAnalysis]], CompetitorTitleAnalysis,
+    ]] = {}
+    size_studies: list[SizeCompetitorStudy] = []
+    for size, scenario in zip(sizes, scenarios):
+        key = size or ""
+        exact_titles = request.competitor_titles_by_size.get(key, [])
+        local_titles = exact_titles or request.competitor_titles
+        local_request = request.model_copy(update={"competitor_titles": local_titles})
+        local_terms = _competitor_terms(local_request, features)
+        local_keyword_analysis = _keyword_analysis(
+            local_request, [scenario], features, local_terms,
+        )
+        local_selected = _selected_keywords(local_request, local_keyword_analysis)
+        local_structure = _competitor_analysis(local_request, features)
+        size_contexts[key] = (
+            local_titles, local_terms, local_keyword_analysis,
+            local_selected, local_structure,
+        )
+        size_studies.append(SizeCompetitorStudy(
+            size=key or "当前尺寸",
+            sample_size=len(local_titles),
+            dominant_formula=local_structure.dominant_formula,
+            formula_coverage_percent=local_structure.formula_coverage_percent,
+            frequent_terms=local_terms[:8],
+            aba_terms=local_keyword_analysis[:8],
+            note=(
+                f"使用 {len(exact_titles)} 个同尺寸竞品独立分析。"
+                if exact_titles else "未识别到足够同尺寸竞品，暂时回退到全部已锁定竞品；建议人工补充同尺寸 ASIN。"
+            ),
+        ))
 
     candidates: list[TitleCandidate] = []
     for color in colors:
@@ -501,13 +591,10 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
             category = scenario.product_type
             title_size = None if (size or "").strip().lower() in {"尺寸未识别", "unknown", "n/a"} else size
             styles = _style_parts(request.style)
-            size_competitor_titles = request.competitor_titles_by_size.get(size or "", [])
-            size_competitor_terms = _competitor_terms(
-                request.model_copy(update={
-                    "competitor_titles": size_competitor_titles or request.competitor_titles,
-                }),
-                features,
-            )
+            (
+                size_competitor_titles, size_competitor_terms, size_keyword_analysis,
+                size_selected_keywords, size_competitor_analysis,
+            ) = size_contexts[size or ""]
             size_market_phrase = next(
                 (
                     item.term for item in size_competitor_terms
@@ -516,8 +603,8 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 ),
                 None,
             )
-            main_terms = selected_keywords["main"]
-            highlight_terms = selected_keywords["highlight"]
+            main_terms = size_selected_keywords["main"]
+            highlight_terms = size_selected_keywords["highlight"]
             primary_keyword = next(
                 (item for item in main_terms if re.search(r"\b(?:area|runner|accent)\s+rugs?\b", item.term, re.I)),
                 main_terms[0] if main_terms else None,
@@ -530,7 +617,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
             category_part = _display_phrase(primary_keyword.term) if primary_keyword else category
             formula_slots = re.findall(
                 r"\b(?:Brand|Category|Feature|Style|Material|Scene|Size)\b",
-                competitor_analysis.dominant_formula,
+                size_competitor_analysis.dominant_formula,
             )
             slot_values: dict[str, list[str | None]] = {
                 "Brand": [brand],
@@ -569,27 +656,29 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
             seen: set[str] = set()
             for strategy, parts in structures:
                 if request.title_format == "split":
-                    main = _join_main(parts, 75)
+                    main = _join_main(parts, 75, claim_patterns)
                     highlight_parts = [
                         request.material or "",
                         *features[2:5],
                         *scenario.primary_scenes[:2],
                     ]
-                    highlight = _compact_highlight(highlight_parts, existing=main)
+                    highlight = _compact_highlight(
+                        highlight_parts, existing=main, claim_patterns=claim_patterns,
+                    )
                     full = f"{main} | {highlight}"
                 else:
                     highlight = None
-                    main = _join_main(parts, 200)
+                    main = _join_main(parts, 200, claim_patterns)
                     sentence = _compact_highlight([
                         request.material or "", *features[2:5], *scenario.primary_scenes[:2],
-                    ], existing=main)
+                    ], existing=main, claim_patterns=claim_patterns)
                     if sentence and len(f"{main}, {sentence}") <= 200:
                         main = f"{main}, {sentence}"
                     full = main
                 if not main or full.lower() in seen:
                     continue
                 seen.add(full.lower())
-                used = [item.term for item in keyword_analysis if item.term.lower() in full.lower()]
+                used = [item.term for item in size_keyword_analysis if item.term.lower() in full.lower()]
                 unused = [
                     item.term for item in [*main_terms, *highlight_terms]
                     if item.term.lower() not in full.lower()
@@ -604,7 +693,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                         f"{size or '当前尺寸'} · 参考 {len(size_competitor_titles)} 个同尺寸/近似尺寸竞品标题"
                     )
                 warnings: list[str] = []
-                if not keyword_analysis:
+                if not size_keyword_analysis:
                     warnings.append("最新词库中没有通过类目、属性与尺寸场景校验的候选词，请人工检查类目词。")
                 if not features:
                     warnings.append("本品真实资料中未识别到稳定卖点，请补充产品事实后再确认。")
@@ -621,7 +710,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                     full_count=len(full), keywords_used=used,
                     strategy=strategy, score=min(100, base_score + coverage_score),
                     keyword_evidence=evidence, unused_keywords=unused,
-                    ad_keywords=[item.term for item in selected_keywords["ads"]],
+                    ad_keywords=[item.term for item in size_selected_keywords["ads"]],
                     warnings=warnings,
                 ))
 
@@ -632,6 +721,8 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
         size_scenarios=scenarios,
         competitor_analysis=competitor_analysis,
         competitor_terms=competitor_terms,
+        semantic_clusters=semantic_clusters,
+        size_competitor_studies=size_studies,
         rules=[
             "主标题前部必须出现与尺寸一致的类目大词，让消费者立即识别商品类型",
             "词库排名为上传文件最新月份的搜索量排名，不代表 Amazon 自然搜索排名",
