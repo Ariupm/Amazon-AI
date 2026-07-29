@@ -130,6 +130,28 @@ export default function MarketWorkspace() {
     return [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
   }
 
+  function inferCategory(title: string) {
+    const normalized = title.toLowerCase();
+    if (/\brunner rugs?\b/.test(normalized)) return "Runner Rug";
+    if (/\bround (?:area )?rugs?\b/.test(normalized)) return "Round Area Rug";
+    if (/\baccent rugs?\b/.test(normalized)) return "Accent Rug";
+    if (/\barea rugs?\b/.test(normalized)) return "Area Rug";
+    if (/\brugs?\b/.test(normalized)) return "Area Rug";
+    return "";
+  }
+
+  function errorDetail(value: unknown, fallback: string) {
+    if (typeof value === "string" && value.trim()) return value;
+    if (Array.isArray(value)) {
+      const messages = value.map(item => {
+        if (item && typeof item === "object" && "msg" in item) return String(item.msg);
+        return typeof item === "string" ? item : "";
+      }).filter(Boolean);
+      if (messages.length) return messages.join("；");
+    }
+    return fallback;
+  }
+
   function resetDiscovery() {
     setCandidates([]);
     setCustomQueries("");
@@ -181,7 +203,13 @@ export default function MarketWorkspace() {
       });
       const batch = await response.json();
       if (!response.ok || !batch.items?.[0]?.success) throw new Error(batch.detail || batch.items?.[0]?.error || "读取失败");
-      setProduct(batch.items[0].result);
+      const loadedProduct = batch.items[0].result as Product;
+      setProduct(loadedProduct);
+      setFacts(current => ({
+        ...current,
+        brand: current.brand || loadedProduct.brand || "",
+        category: current.category || inferCategory(loadedProduct.title),
+      }));
       resetDiscovery();
       setSourceMessage(taskMode === "new-variant" ? `父体读取完成：已取得 ${batch.items[0].result.variants?.length || 0} 个现有子体，后续竞品搜索会全部排除。` : "该子体资料已读取。请确认商品事实，再发现竞品。");
     } catch (error) {
@@ -189,31 +217,42 @@ export default function MarketWorkspace() {
     } finally { setLoading(""); }
   }
 
-  function competitorSourcePayload() {
+  function competitorSourcePayload(categoryOverride?: string) {
+    const targetName = taskMode === "new-product"
+      ? [facts.brand, facts.productName || facts.category, facts.material, facts.style, facts.mustHave].filter(Boolean).join(" ")
+      : product?.title || "";
     return {
-      target_name: taskMode === "new-product"
-        ? [facts.brand, facts.productName || facts.category, facts.material, facts.style, facts.mustHave].filter(Boolean).join(" ")
-        : product?.title || null,
-      category: facts.category || null, material: facts.material || null,
+      target_name: targetName.slice(0, 160) || null,
+      category: categoryOverride || facts.category || null, material: facts.material || null,
       style: facts.style || null, use_case: facts.useCase || null,
       features: facts.mustHave.split(/[,，\n]+/).map(value => value.trim()).filter(Boolean),
-      reference_titles: product ? [product.title, ...product.variants.map(variant => variant.title || "")].filter(Boolean) : [],
-      reference_bullets: product ? [...product.bullets, ...product.variants.flatMap(variant => variant.bullets || [])] : [facts.material, facts.style, facts.useCase, facts.mustHave].filter(Boolean),
+      reference_titles: product ? [product.title, ...product.variants.map(variant => variant.title || "")].filter(Boolean).slice(0, 100) : [],
+      reference_bullets: product ? [...product.bullets, ...product.variants.flatMap(variant => variant.bullets || [])].slice(0, 100) : [facts.material, facts.style, facts.useCase, facts.mustHave].filter(Boolean),
     };
   }
 
   async function prepareSearchPlan() {
     if (!sourceReady) return setMessage(taskMode === "new-product" ? "请先完整填写新品资料。" : "请先读取本品资料。");
-    if (!facts.category.trim()) return setMessage("请先填写并确认类目大词，用于定义直接竞品的产品类型。");
+    const resolvedCategory = facts.category.trim() || inferCategory(product?.title || "");
+    if (!resolvedCategory) {
+      setMessage("未能从商品标题识别类目，请填写“类目大词”后再生成搜索方案。");
+      setTimeout(() => {
+        const field = document.querySelector('input[placeholder="例如 Area Rug"]') as HTMLInputElement | null;
+        field?.scrollIntoView({ behavior: "smooth", block: "center" });
+        field?.focus();
+      }, 50);
+      return;
+    }
+    if (!facts.category.trim()) setFacts(current => ({ ...current, category: resolvedCategory }));
     setLoading("plan"); setMessage("正在整理本品画像、分层搜索词与排除建议，不会访问 Amazon…");
     try {
       await ensureCurrentBackend();
       const response = await fetch(`${API}/api/competitors/plan`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(competitorSourcePayload()),
+        body: JSON.stringify(competitorSourcePayload(resolvedCategory)),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.detail || "搜索方案生成失败");
+      if (!response.ok) throw new Error(errorDetail(result.detail, "搜索方案生成失败"));
       setSearchPlan({
         productType: result.product_type,
         directDefinition: result.direct_competitor_definition,
