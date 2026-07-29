@@ -5,7 +5,7 @@ $port = 8765
 $webPort = 3000
 $healthUrl = "http://127.0.0.1:$port/health"
 $openApiUrl = "http://127.0.0.1:$port/openapi.json"
-$pageUrl = "http://127.0.0.1:$webPort/titles"
+$pageUrl = "http://localhost:$webPort/titles"
 $requiredFeatureVersion = "title-traffic-v16"
 
 function Get-ListenerProcessId {
@@ -43,7 +43,7 @@ if ($listenerProcessId) {
             Invoke-WebRequest $pageUrl -UseBasicParsing -TimeoutSec 2 | Out-Null
         } catch {
             Start-Process -FilePath "npm.cmd" `
-                -ArgumentList "run", "dev", "--", "--host", "127.0.0.1", "--port", "$webPort" `
+                -ArgumentList "run", "dev", "--", "--host", "localhost", "--port", "$webPort" `
                 -WorkingDirectory $PSScriptRoot `
                 -WindowStyle Hidden
         }
@@ -69,7 +69,7 @@ $server = Start-Process -FilePath "python" `
     -WindowStyle Hidden `
     -PassThru
 $webServer = Start-Process -FilePath "npm.cmd" `
-    -ArgumentList "run", "dev", "--", "--host", "127.0.0.1", "--port", "$webPort" `
+    -ArgumentList "run", "dev", "--", "--host", "localhost", "--port", "$webPort" `
     -WorkingDirectory $PSScriptRoot `
     -WindowStyle Hidden `
     -PassThru
