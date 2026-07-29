@@ -21,8 +21,8 @@ from .keyword_files import inspect_keyword_file, inspect_negative_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 from .title_generator import generate_titles
 
-FEATURE_VERSION = "size-specific-title-study-v23"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.23.0")
+FEATURE_VERSION = "natural-title-composition-v24"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.24.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

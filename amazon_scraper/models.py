@@ -347,6 +347,7 @@ class CompetitorTitleAnalysis(BaseModel):
     median_length: int = 0
     length_range: str = ""
     anti_patterns: list[str] = Field(default_factory=list)
+    punctuation_insights: list[str] = Field(default_factory=list)
 
 
 class CompetitorTermAnalysis(BaseModel):

@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "size-specific-title-study-v23";
+const REQUIRED_BACKEND = "natural-title-composition-v24";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
@@ -63,6 +63,7 @@ type CompetitorTitleAnalysis = {
   dominant_formula: string; formula_coverage_percent: number;
   common_slot_orders: string[]; position_insights: string[];
   median_length: number; length_range: string; anti_patterns: string[];
+  punctuation_insights: string[];
 };
 type CompetitorTermAnalysis = {
   term: string; document_frequency: number; weighted_frequency: number;
@@ -935,7 +936,8 @@ export default function MarketWorkspace() {
               <div className="wideStudy formulaStudy"><span>头部竞品主导公式</span><b>{competitorTitleAnalysis.dominant_formula || competitorTitleAnalysis.recommended_structure}</b><em>{competitorTitleAnalysis.formula_coverage_percent || 0}% 样本采用相同槽位顺序</em><small>{competitorTitleAnalysis.consumer_note}</small></div>
               {!!competitorTitleAnalysis.common_slot_orders?.length && <div className="wideStudy"><span>常见结构排序</span><div className="structureChips">{competitorTitleAnalysis.common_slot_orders.map(value => <i key={value}>{value}</i>)}</div></div>}
               {!!competitorTitleAnalysis.position_insights?.length && <div><span>各信息槽位出现位置</span><ul>{competitorTitleAnalysis.position_insights.map(value => <li key={value}>{value}</li>)}</ul></div>}
-              <div><span>禁止照搬的错误</span><ul>{(competitorTitleAnalysis.anti_patterns || []).map(value => <li key={value}>{value}</li>)}</ul></div>
+              <div><span>逗号与信息分组</span><ul>{(competitorTitleAnalysis.punctuation_insights || []).map(value => <li key={value}>{value}</li>)}</ul></div>
+              <div className="wideStudy"><span>禁止照搬的错误</span><div className="structureChips">{(competitorTitleAnalysis.anti_patterns || []).map(value => <i key={value}>{value}</i>)}</div></div>
             </div>}
             {!!competitorTerms.length && <div className="competitorTermStudy"><div className="dualPoolHead"><div><span>词池 A · MARKET LANGUAGE</span><h4>头部竞品高频表达</h4><p>按不同竞品标题的出现覆盖率统计；前10个头部竞品获得更高权重。</p></div><em>{competitorTerms.length} 个市场表达</em></div><div className="competitorTermGrid">{competitorTerms.slice(0, 12).map(item => <article key={item.term}><div><b>{item.term}</b><span>{item.coverage_percent}% 竞品覆盖</span></div><small>{item.matched_facts.length ? `匹配本品：${item.matched_facts.join("、")}` : "仅作市场结构参考"} · {item.recommended_placement === "main" ? "建议主标题" : item.recommended_placement === "highlight" ? "建议 Highlight" : "结构参考"}</small></article>)}</div></div>}
             {!!semanticClusters.length && <div className="semanticClusterStudy"><div><b>本轮语义卖点簇</b><span>只有明确同义或上下位包含关系才合并；其余已确认属性保持独立。</span></div><div>{semanticClusters.map(value => <i key={value}>{value}</i>)}</div></div>}
@@ -948,7 +950,7 @@ export default function MarketWorkspace() {
               })}</div>
             </div>
           </section>}
-          {!!keywordSelections.length && <div className="generateAction"><div><b>人工确认后生成三种策略</b><span>流量优先、点击吸引、均衡转化；生成器严格使用上方位置方案。</span></div><button onClick={generateTitleCandidates} disabled={loading === "titles"}>{loading === "titles" ? "正在生成…" : generatedTitles.length ? "按当前方案重新生成" : "确认关键词并生成标题"}</button></div>}
+          {!!keywordSelections.length && <div className="generateAction"><div><b>人工确认后生成最多三种策略</b><span>流量优先、点击吸引、均衡转化；若两种策略形成相同标题会自动合并，不重复展示。</span></div><button onClick={generateTitleCandidates} disabled={loading === "titles"}>{loading === "titles" ? "正在生成…" : generatedTitles.length ? "按当前方案重新生成" : "确认关键词并生成标题"}</button></div>}
           {!!trafficKeywords.length && <div className="trafficKeywordBar"><b>通过校验的候选词</b>{trafficKeywords.slice(0, 10).map(item => <span key={item.term}>{item.rank ? `#${item.rank} · ` : ""}{item.term}{item.volume ? ` · ${item.volume.toLocaleString()}` : ""}</span>)}</div>}
           {!!generatedTitles.length && <><div className="titleExportBar"><div><b>{optimizeScope === "family" && taskMode === "optimize" ? "多尺寸标题已整理" : "标题候选已整理"}</b><span>{optimizeScope === "family" && taskMode === "optimize" ? "Excel 第一行以尺寸作为列标题，并附带可筛选的明细表。" : "可导出当前全部策略与人工编辑后的内容。"}</span></div><button onClick={exportGeneratedTitles} disabled={loading === "title-export"}>{loading === "title-export" ? "正在导出…" : "导出标题 Excel"}</button></div><div className="generatedTitles" id="generated-titles">{generatedTitles.map((item, index) => {
             const mainLimit = titleFormat === "split" ? 75 : 200;

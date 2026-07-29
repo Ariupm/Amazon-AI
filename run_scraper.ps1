@@ -5,8 +5,25 @@ $port = 8765
 $webPort = 3000
 $healthUrl = "http://127.0.0.1:$port/health"
 $openApiUrl = "http://127.0.0.1:$port/openapi.json"
+$requiredFeatureVersion = "natural-title-composition-v24"
+
+# Port 3000 may belong to another local project (for example the comic
+# workspace). Never stop an unrelated service; fall back to 3001 instead.
+$webListener = Get-NetTCPConnection -LocalPort $webPort -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if ($webListener) {
+    $isTitleWorkspace = $false
+    try {
+        $existingPage = Invoke-WebRequest "http://localhost:$webPort/titles" -UseBasicParsing -TimeoutSec 2
+        $isTitleWorkspace = $existingPage.Content -match "标题半自动化工作台"
+    } catch {
+        $isTitleWorkspace = $false
+    }
+    if (-not $isTitleWorkspace) {
+        $webPort = 3001
+    }
+}
 $pageUrl = "http://localhost:$webPort/titles"
-$requiredFeatureVersion = "size-specific-title-study-v23"
 
 function Get-ListenerProcessId {
     $connection = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
@@ -94,19 +111,26 @@ try {
     if (-not $ready) {
         throw "抓取器启动超时。"
     }
+    $webReady = $false
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
         Start-Sleep -Milliseconds 300
         try {
-            Invoke-WebRequest $pageUrl -UseBasicParsing -TimeoutSec 2 | Out-Null
-            break
+            $page = Invoke-WebRequest $pageUrl -UseBasicParsing -TimeoutSec 2
+            if ($page.Content -match "标题半自动化工作台") {
+                $webReady = $true
+                break
+            }
         } catch {
             if ($webServer.HasExited) {
                 throw "本地标题工作台启动失败。"
             }
         }
     }
+    if (-not $webReady) {
+        throw "本地标题工作台未能在端口 $webPort 正确启动。"
+    }
     Start-Process $pageUrl
-    Write-Host "标题工作台 V23 与真实抓取器已在本机启动。关闭此窗口可停止服务。" -ForegroundColor Green
+    Write-Host "标题工作台 V24 已在 $pageUrl 启动。关闭此窗口可停止服务。" -ForegroundColor Green
     Wait-Process -Id $server.Id
 } finally {
     if (Get-Process -Id $server.Id -ErrorAction SilentlyContinue) {

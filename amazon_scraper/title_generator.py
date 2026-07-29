@@ -46,7 +46,7 @@ IRRELEVANT_RUG_TERMS = {
     "cleaner", "machine cleaner", "vacuum", "tape", "gripper", "pad", "pads",
     "shampoo", "repair", "outdoor", "door mat", "bath mat",
 }
-LOW_VALUE_CONNECTORS = {"with", "and", "for"}
+LOW_VALUE_CONNECTORS = {"with", "and"}
 SCENE_WORDS = {
     "living room", "bedroom", "dining room", "kitchen", "hallway",
     "entryway", "nursery", "home office", "bathroom", "laundry room",
@@ -376,6 +376,9 @@ def _competitor_analysis(request: TitleGenerateRequest, features: list[str]) -> 
     median_length = lengths[len(lengths) // 2] if lengths else 0
     lower = lengths[max(0, round((len(lengths) - 1) * .25))] if lengths else 0
     upper = lengths[min(len(lengths) - 1, round((len(lengths) - 1) * .75))] if lengths else 0
+    comma_counts = [title.count(",") for title in titles]
+    average_commas = round(sum(comma_counts) / len(comma_counts), 1) if comma_counts else 0
+    segmented = sum(count > 0 for count in comma_counts)
     early_category = sum(bool(re.search(r"\b(?:area|runner|accent)\s+rugs?\b", " ".join(title.split()[:8]), re.I)) for title in head_titles)
     structure = (
         "Brand + high-traffic category/scene phrase + strongest differentiator + style + size/color."
@@ -395,6 +398,10 @@ def _competitor_analysis(request: TitleGenerateRequest, features: list[str]) -> 
         median_length=median_length,
         length_range=f"{lower}–{upper} 字符" if lengths else "",
         anti_patterns=["同义卖点跨段重复", "连续堆放多个高度重合长尾词", "未经产品事实确认的功能或场景"],
+        punctuation_insights=[
+            f"{round(segmented * 100 / max(1, len(titles)))}% 标题使用逗号划分信息组",
+            f"平均 {average_commas} 个逗号；逗号用于分隔类目识别、差异卖点和规格场景，不用于逐词切割",
+        ],
     )
 
 
@@ -460,8 +467,16 @@ def _dedupe_semantic_part(
             normalized = re.sub(pattern, " ", normalized, flags=re.I)
         else:
             used_claims.add(claim)
+            occurrence = 0
+            def keep_first(match: re.Match[str]) -> str:
+                nonlocal occurrence
+                occurrence += 1
+                return match.group(0) if occurrence == 1 else " "
+            normalized = re.sub(pattern, keep_first, normalized, flags=re.I)
     normalized = re.sub(r"\s+", " ", normalized)
-    normalized = re.sub(r"^(?:for|with|and)\b|\b(?:for|with|and)$", "", normalized, flags=re.I)
+    normalized = re.sub(r"\s*,\s*,+", ", ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = re.sub(r"^(?:with|and)\b|\b(?:with|and)$", "", normalized, flags=re.I)
     return normalized.strip(" ,.|-")
 
 
@@ -476,6 +491,34 @@ def _join_main(parts: list[str | None], limit: int, claim_patterns: dict[str, st
         if len(proposed) <= limit:
             result = proposed
     return result
+
+
+def _compose_main_blocks(
+    blocks: list[list[str | None]],
+    limit: int,
+    claim_patterns: dict[str, str],
+) -> str:
+    """Join words inside information blocks; use commas only between blocks."""
+    used_claims: set[str] = set()
+    rendered: list[str] = []
+    for block in blocks:
+        block_parts: list[str] = []
+        for raw in block:
+            part = _dedupe_semantic_part(raw, used_claims, claim_patterns)
+            if part and part.lower() not in " ".join(block_parts).lower():
+                block_parts.append(part)
+        if not block_parts:
+            continue
+        block_text = " ".join(block_parts)
+        proposed = ", ".join([*rendered, block_text])
+        if len(proposed) <= limit:
+            rendered.append(block_text)
+            continue
+        for part in block_parts:
+            proposed = ", ".join([*rendered, part])
+            if len(proposed) <= limit:
+                rendered.append(part)
+    return ", ".join(rendered)
 
 
 def _display_phrase(value: str) -> str:
@@ -628,39 +671,53 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 "Scene": [scene_part or (scenario.primary_scenes[0] if scenario.primary_scenes else None)],
                 "Size": [title_size, color],
             }
-            formula_parts = [
-                part for slot in formula_slots for part in slot_values.get(slot, [])
-            ] if formula_slots else []
-            traffic_parts = [
-                brand,
-                category_part,
-                scene_part,
-                *styles[:1], title_size, color, *features[:2],
+            ordered_descriptors = [
+                part for slot in formula_slots
+                if slot not in {"Brand", "Category", "Size"}
+                for part in slot_values.get(slot, [])
             ]
-            click_parts = [
-                brand, features[0] if features else request.style,
-                category_part,
-                *styles[:2], title_size, color, *features[1:3],
+            traffic_blocks = [
+                [brand, category_part],
+                [scene_part, *styles[:1], *features[:1]],
+                [*features[1:2]],
+                [title_size, color],
             ]
-            balanced_parts = [
-                *formula_parts,
-                category_part, scene_part,
-                _display_phrase(size_market_phrase) if size_market_phrase else None,
-                *styles[:1], *features[:2], color, title_size,
+            click_blocks = [
+                [brand, category_part],
+                [features[0] if features else None, *styles[:1]],
+                [scene_part, *features[1:2]],
+                [title_size, color],
+            ]
+            balanced_blocks = [
+                [brand, category_part],
+                [
+                    *ordered_descriptors[:3],
+                    _display_phrase(size_market_phrase) if size_market_phrase else None,
+                ],
+                ordered_descriptors[3:5],
+                [title_size, color],
             ]
             structures = [
-                ("traffic", traffic_parts),
-                ("click", click_parts),
-                ("balanced", balanced_parts),
+                ("traffic", traffic_blocks),
+                ("click", click_blocks),
+                ("balanced", balanced_blocks),
             ]
             seen: set[str] = set()
-            for strategy, parts in structures:
+            for strategy, blocks in structures:
                 if request.title_format == "split":
-                    main = _join_main(parts, 75, claim_patterns)
+                    main = _compose_main_blocks(blocks, 75, claim_patterns)
+                    material_phrase = " ".join([
+                        *_style_parts(request.material),
+                        "Surface" if "rug" in category.lower() else "",
+                    ]).strip()
+                    feature_phrase = " ".join(features[1:]).strip()
+                    scenes = list(dict.fromkeys([
+                        *scenario.primary_scenes, *scenario.secondary_scenes,
+                    ]))[:4]
                     highlight_parts = [
-                        request.material or "",
-                        *features[2:5],
-                        *scenario.primary_scenes[:2],
+                        material_phrase,
+                        feature_phrase,
+                        f"for {', '.join(scenes)}" if scenes else "",
                     ]
                     highlight = _compact_highlight(
                         highlight_parts, existing=main, claim_patterns=claim_patterns,
@@ -668,9 +725,19 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                     full = f"{main} | {highlight}"
                 else:
                     highlight = None
-                    main = _join_main(parts, 200, claim_patterns)
+                    main = _compose_main_blocks(blocks, 200, claim_patterns)
+                    material_phrase = " ".join([
+                        *_style_parts(request.material),
+                        "Surface" if "rug" in category.lower() else "",
+                    ]).strip()
+                    feature_phrase = " ".join(features[1:]).strip()
+                    scenes = list(dict.fromkeys([
+                        *scenario.primary_scenes, *scenario.secondary_scenes,
+                    ]))[:4]
                     sentence = _compact_highlight([
-                        request.material or "", *features[2:5], *scenario.primary_scenes[:2],
+                        material_phrase,
+                        feature_phrase,
+                        f"for {', '.join(scenes)}" if scenes else "",
                     ], existing=main, claim_patterns=claim_patterns)
                     if sentence and len(f"{main}, {sentence}") <= 200:
                         main = f"{main}, {sentence}"

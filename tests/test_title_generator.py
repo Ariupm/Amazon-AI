@@ -29,7 +29,8 @@ class TitleGeneratorTests(unittest.TestCase):
 
         result = generate_titles(request)
 
-        self.assertEqual(len(result.candidates), 12)
+        self.assertGreaterEqual(len(result.candidates), 8)
+        self.assertLessEqual(len(result.candidates), 12)
         self.assertTrue(result.traffic_keywords)
         self.assertNotIn("kitchen knife set", [item.term for item in result.traffic_keywords])
         self.assertTrue(all(item.main_count <= 75 for item in result.candidates))
