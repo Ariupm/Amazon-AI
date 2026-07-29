@@ -108,7 +108,7 @@ test("renders child bullets with a product fallback", async () => {
 
 test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
-  assert.match(launcher, /competitor-funnel-v15/);
+  assert.match(launcher, /title-traffic-v16/);
   assert.match(launcher, /检测到旧版抓取器/);
   assert.match(launcher, /netstat -ano/);
   assert.match(launcher, /Get-ListenerProcessId/);
