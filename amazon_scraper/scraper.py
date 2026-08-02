@@ -167,6 +167,30 @@ async def _challenge(page: Page, headless: bool, purpose: str = "商品页面") 
             return
 
 
+async def goto_with_retry(
+    page: Page,
+    url: str,
+    *,
+    purpose: str = "Amazon 页面",
+    attempts: int = 3,
+) -> None:
+    """Retry transient blank pages and interrupted Amazon navigations."""
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            await page.wait_for_timeout(700)
+            body = await page.locator("body").inner_text()
+            if len(body.strip()) >= 40:
+                return
+            last_error = ScrapeError(f"{purpose}返回空白页面")
+        except Exception as error:
+            last_error = error
+        if attempt + 1 < attempts:
+            await page.wait_for_timeout(1_200 * (attempt + 1))
+    raise ScrapeError(f"{purpose}连续 {attempts} 次加载失败：{last_error}")
+
+
 async def _extract_variants(page: Page, base_url: str) -> list[Variant]:
     variants: dict[str, Variant] = {}
     # Never query [data-csa-c-asin] globally: Amazon uses it for carousels,
@@ -497,6 +521,11 @@ class BrowserSession:
         self.context: BrowserContext | None = None
 
     async def __aenter__(self) -> "BrowserSession":
+        return await self.start()
+
+    async def start(self) -> "BrowserSession":
+        if self.context and any(not page.is_closed() for page in self.context.pages):
+            return self
         _, locale = MARKETPLACES[self.marketplace]
         chrome = next((path for path in CHROME_PATHS if path.exists()), None)
         if not chrome:
@@ -515,10 +544,15 @@ class BrowserSession:
         return self
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
+        await self.close()
+
+    async def close(self) -> None:
         if self.context:
             await self.context.close()
+            self.context = None
         if self.playwright:
             await self.playwright.stop()
+            self.playwright = None
 
 
 async def _scrape_in_context(
@@ -537,7 +571,7 @@ async def _scrape_in_context(
     source_url = f"{base_url}/dp/{asin}"
     warnings: list[str] = []
 
-    await page.goto(source_url, wait_until="domcontentloaded", timeout=60_000)
+    await goto_with_retry(page, source_url, purpose="商品页面")
     await _challenge(page, headless)
     await page.wait_for_timeout(1100)
     initial = await _snapshot(page, base_url, asin)
@@ -588,9 +622,10 @@ async def _scrape_in_context(
             collected_actual_asins: set[str] = set()
             for child_asin in child_asins:
                 try:
-                    await page.goto(
+                    await goto_with_retry(
+                        page,
                         f"{base_url}/dp/{child_asin}?th=1&psc=1",
-                        wait_until="domcontentloaded", timeout=60_000,
+                        purpose=f"子体 {child_asin}",
                     )
                     await _challenge(page, headless, f"子体 {child_asin}")
                     await page.wait_for_timeout(750)

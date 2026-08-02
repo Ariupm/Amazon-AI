@@ -95,46 +95,115 @@ def _extract_size(value: str) -> str | None:
     return re.sub(r"\s+", " ", match.group(1)).strip() if match else None
 
 
-def _dimensions(size: str | None) -> tuple[float, float] | None:
+def _dimensions(size: str | None, category: str | None = None) -> tuple[float, float] | None:
+    """Return dimensions in inches; bare rug sizes <=12 are conventionally feet."""
     if not size:
         return None
-    numbers = [float(value) for value in re.findall(r"\d+(?:\.\d+)?", size)]
-    return (numbers[0], numbers[1]) if len(numbers) >= 2 else None
+    parts = re.split(r"\s*[x×]\s*", size.lower(), maxsplit=1)
+    if len(parts) != 2:
+        return None
+
+    is_rug = bool(re.search(r"\b(?:rug|rugs|carpet|carpets)\b", category or "", re.I))
+
+    def inches(part: str) -> float | None:
+        feet_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:'|ft|feet)", part)
+        inch_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:\"|''|in|inch|inches)", part)
+        if feet_match:
+            return float(feet_match.group(1)) * 12 + (float(inch_match.group(1)) if inch_match else 0)
+        number = re.search(r"\d+(?:\.\d+)?", part)
+        if not number:
+            return None
+        value = float(number.group())
+        if re.search(r"(?:\"|''|\bin(?:ch|ches)?\b)", part):
+            return value
+        return value * 12 if is_rug and value <= 12 else value
+
+    values = (inches(parts[0]), inches(parts[1]))
+    return values if all(value is not None for value in values) else None  # type: ignore[return-value]
 
 
-def _scenario(size: str | None, fallback_category: str | None = None) -> SizeScenarioAnalysis:
-    dims = _dimensions(size)
+SCENE_LABELS = (
+    (r"\bkitchen counter(?:top)?s?\b|\bcountertops?\b", "Kitchen Counter"),
+    (r"\bsink side\b|\bnext to (?:the )?sink\b|\bby (?:the )?sink\b", "Sink Side"),
+    (r"\bcoffee bars?\b|\bcoffee stations?\b", "Coffee Bar"),
+    (r"\brv kitchens?\b|\bcampers?\b", "RV Kitchen"),
+    (r"\bliving rooms?\b", "Living Room"),
+    (r"\bbedrooms?\b", "Bedroom"),
+    (r"\bdining rooms?\b", "Dining Room"),
+    (r"\bhome offices?\b", "Home Office"),
+    (r"\bhallways?\b", "Hallway"),
+    (r"\bentryways?\b|\bentrances?\b", "Entryway"),
+    (r"\blaundry rooms?\b", "Laundry Room"),
+    (r"\bbathrooms?\b", "Bathroom"),
+    (r"\bkitchens?\b", "Kitchen"),
+)
+
+
+def _evidence_scenes(evidence: list[str]) -> list[str]:
+    corpus = " ".join(evidence).lower()
+    ranked: list[tuple[int, int, str]] = []
+    for index, (pattern, label) in enumerate(SCENE_LABELS):
+        count = len(re.findall(pattern, corpus, re.I))
+        if count:
+            ranked.append((-count, index, label))
+    return [label for _, _, label in sorted(ranked)]
+
+
+def _scenario(
+    size: str | None,
+    fallback_category: str | None = None,
+    evidence: list[str] | None = None,
+) -> SizeScenarioAnalysis:
+    category = fallback_category.strip() if fallback_category else "类目待确认"
+    dims = _dimensions(size, category)
+    evidence_scenes = _evidence_scenes(evidence or [])
+    is_rug = bool(re.search(r"\b(?:rug|rugs|carpet|carpets)\b", category, re.I))
     if not dims:
-        category = fallback_category.strip() if fallback_category else "Area Rug"
         return SizeScenarioAnalysis(
             size=size, product_type=category,
-            primary_scenes=["Living Room", "Bedroom"],
-            secondary_scenes=["Dining Room"],
-            reasoning="尺寸未识别，场景按本品类目与竞品常见用途给出，定稿前需人工确认。",
+            primary_scenes=evidence_scenes[:2],
+            secondary_scenes=evidence_scenes[2:4],
+            reasoning="尺寸或单位未识别；场景仅采用竞品标题与 ABA 词库中能够找到的用途证据，定稿前需人工确认。",
         )
     short, long = sorted(dims)
-    if short <= 3 and long >= short * 1.8:
+    if not is_rug:
+        defaults: list[str] = []
+        if re.search(r"\bdish drying mat\b|\bdrying mat\b", category, re.I):
+            defaults = ["Kitchen Counter", "Sink Side", "Coffee Bar", "RV Kitchen"]
+        scenes = list(dict.fromkeys([*evidence_scenes, *defaults]))
+        area = round(short * long)
+        scale = "小尺寸" if area <= 400 else "中等尺寸" if area <= 900 else "大尺寸"
+        return SizeScenarioAnalysis(
+            size=size, product_type=category,
+            primary_scenes=scenes[:2],
+            secondary_scenes=scenes[2:4],
+            reasoning=(
+                f"已按英寸解析为 {short:g} × {long:g} in（{scale}）；"
+                "类目保持为已确认商品类型，场景优先按同尺寸竞品和 ABA 用途词频排序。"
+            ),
+        )
+    if short <= 36 and long >= short * 1.8:
         return SizeScenarioAnalysis(
             size=size, product_type="Runner Rug",
             primary_scenes=["Hallway", "Kitchen"],
             secondary_scenes=["Entryway", "Laundry Room"],
             reasoning="窄长比例适合通道型空间；市场标题通常使用 Runner Rug，并优先表达 Hallway / Kitchen。",
         )
-    if long <= 4:
+    if long <= 48:
         return SizeScenarioAnalysis(
             size=size, product_type="Accent Rug",
             primary_scenes=["Entryway", "Bathroom"],
             secondary_scenes=["Bedside", "Kitchen"],
             reasoning="小尺寸更适合局部落脚与装饰区域，使用 Accent Rug 比 Area Rug 更符合消费者预期。",
         )
-    if long <= 7:
+    if long <= 84:
         return SizeScenarioAnalysis(
             size=size, product_type="Area Rug",
             primary_scenes=["Bedroom", "Home Office"],
             secondary_scenes=["Small Living Room", "Dining Nook"],
             reasoning="中小尺寸适合卧室、书房及小型起居空间；场景词应避免写成 Hallway Runner。",
         )
-    if long <= 10:
+    if long <= 120:
         return SizeScenarioAnalysis(
             size=size, product_type="Area Rug",
             primary_scenes=["Living Room", "Bedroom"],
@@ -194,26 +263,38 @@ def _keyword_analysis(
         for term in request.negative_terms if term.strip()
     }
     max_volume = max((item.volume or 0 for item in request.keywords), default=0)
+    category_tokens = _tokens(request.category or "")
+    is_rug = bool(re.search(
+        r"\b(?:rug|rugs|carpet|carpets)\b", request.category or request.product_title, re.I
+    ))
     ranked: list[tuple[float, TitleKeywordAnalysis]] = []
     for item in request.keywords:
         term = re.sub(r"\s+", " ", item.term).strip()
         lower = term.lower()
-        if not term or len(term) > 80 or not re.search(r"\b(rug|rugs|carpet)\b", lower):
+        meaningful = _tokens(term)
+        category_overlap = len(meaningful & category_tokens)
+        minimum_category_overlap = min(2, len(category_tokens))
+        if (
+            not term or len(term) > 80
+            or (category_tokens and category_overlap < minimum_category_overlap)
+        ):
             continue
-        if any(blocked in lower for blocked in IRRELEVANT_RUG_TERMS):
+        if is_rug and any(blocked in lower for blocked in IRRELEVANT_RUG_TERMS):
             continue
         if any(re.search(rf"\b{re.escape(blocked)}\b", lower) for blocked in negatives):
             continue
         if re.search(r"\b\d+\s*[x×]\s*\d+\b", lower):
             continue
-        if "runner" in lower and "runner" not in product_types:
+        if is_rug and "runner" in lower and "runner" not in product_types:
             continue
         if any(scene in lower for scene in ("bathroom", "kitchen", "hallway")):
             if not any(scene in lower for scene in allowed_scenes):
                 continue
-        meaningful = _tokens(term)
         overlap = len(meaningful & reference)
-        category_match = bool(re.search(r"\b(area rug|area rugs|runner rug|runner rugs|accent rug|accent rugs)\b", lower))
+        category_match = bool(
+            category_tokens
+            and category_overlap >= max(1, minimum_category_overlap)
+        )
         scene_match = any(scene in lower for scene in allowed_scenes)
         feature_match = any(feature.lower().replace("-", " ") in lower.replace("-", " ") for feature in features)
         style_match = bool(meaningful & verified_style_tokens)
@@ -532,6 +613,117 @@ def _keyword_scene(value: str) -> str | None:
     return next((_display_phrase(scene) for scene in SCENE_WORDS if scene in lower), None)
 
 
+def _clean_variant_value(value: str | None, *, color: bool = False) -> str | None:
+    cleaned = re.sub(r"\s*\([^)]*\)\s*", " ", value or "")
+    if color:
+        cleaned = re.sub(r"\s*/\s*", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,/|-")
+    return cleaned or None
+
+
+def _join_scenes(scenes: list[str]) -> str:
+    unique = list(dict.fromkeys(scene for scene in scenes if scene))
+    if len(unique) <= 1:
+        return unique[0] if unique else ""
+    if len(unique) == 2:
+        return f"{unique[0]} and {unique[1]}"
+    return f"{', '.join(unique[:-1])} and {unique[-1]}"
+
+
+def _normalize_title_punctuation(value: str) -> str:
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s*,\s*for\s+", " for ", value, flags=re.I)
+    value = re.sub(r"\bfor\s+([^|]+)", lambda match: "for " + re.sub(r",\s*", " and ", match.group(1)), value, flags=re.I)
+    value = re.sub(r"\s*,\s*,+", ", ", value)
+    return value.strip(" ,.|-")
+
+
+def _market_scene_slots(
+    scenario: SizeScenarioAnalysis,
+    competitor_titles: list[str],
+    keyword_analysis: list[TitleKeywordAnalysis],
+) -> tuple[list[str], list[str]]:
+    """Use same-size market position and ABA volume to decide scene placement."""
+    max_volume = max((item.volume or 0 for item in keyword_analysis), default=0)
+    scored: list[tuple[float, str, bool]] = []
+    for scene in [*scenario.primary_scenes, *scenario.secondary_scenes]:
+        pattern = next((pattern for pattern, label in SCENE_LABELS if label == scene), "")
+        positions = []
+        for title in competitor_titles:
+            match = re.search(pattern, title, re.I) if pattern else None
+            if match:
+                positions.append(match.start() / max(1, len(title)))
+        matching_terms = [
+            item for item in keyword_analysis if scene.lower() in item.term.lower()
+        ]
+        volume = max((item.volume or 0 for item in matching_terms), default=0)
+        volume_score = volume / max_volume if max_volume else 0
+        coverage = len(positions) / max(1, len(competitor_titles))
+        average_position = sum(positions) / len(positions) if positions else 1
+        early_market = coverage >= .25 and average_position <= .58
+        should_main = volume_score >= .55 or early_market
+        score = volume_score * 100 + coverage * 45 + (1 - average_position) * 20
+        scored.append((score, scene, should_main))
+    scored.sort(reverse=True)
+    main = [scene for _, scene, should_main in scored if should_main][:1]
+    highlight = [scene for _, scene, _ in scored if scene not in main][:3]
+    return main, highlight
+
+
+def _color_goes_early(
+    color: str | None,
+    competitor_titles: list[str],
+    keyword_analysis: list[TitleKeywordAnalysis],
+) -> bool:
+    if not color:
+        return False
+    color_pattern = _flexible_phrase_pattern(color)
+    positions = [
+        match.start() / max(1, len(title))
+        for title in competitor_titles
+        if (match := re.search(color_pattern, title, re.I))
+    ]
+    max_volume = max((item.volume or 0 for item in keyword_analysis), default=0)
+    color_volume = max(
+        (item.volume or 0 for item in keyword_analysis if re.search(color_pattern, item.term, re.I)),
+        default=0,
+    )
+    return (
+        bool(max_volume and color_volume / max_volume >= .55)
+        or bool(positions and len(positions) / max(1, len(competitor_titles)) >= .3 and sum(positions) / len(positions) <= .4)
+    )
+
+
+def _best_length_fit(
+    required: list[str],
+    optional: list[str],
+    minimum: int,
+    maximum: int,
+    claim_patterns: dict[str, str],
+    existing: str = "",
+) -> str:
+    """Keep required order, then choose the longest evidence-backed optional combination."""
+    best = _compact_highlight(
+        required, limit=maximum, existing=existing, claim_patterns=claim_patterns,
+    )
+    states = [best]
+    for part in optional:
+        next_states = list(states)
+        for current in states:
+            candidate = _compact_highlight(
+                [current, part], limit=maximum, existing=existing,
+                claim_patterns=claim_patterns,
+            )
+            candidate = _normalize_title_punctuation(candidate)
+            if candidate and candidate not in next_states:
+                next_states.append(candidate)
+        states = sorted(next_states, key=len, reverse=True)[:80]
+    compliant = [state for state in states if minimum <= len(state) <= maximum]
+    if compliant:
+        return max(compliant, key=len)
+    return max((state for state in states if len(state) <= maximum), key=len, default=best)
+
+
 def _compact_highlight(
     parts: list[str],
     limit: int = 125,
@@ -548,10 +740,11 @@ def _compact_highlight(
         part = _dedupe_semantic_part(raw, used_claims, claim_patterns)
         if not part or part.lower() in result.lower():
             continue
-        proposed = f"{result}, {part}" if result else part
+        separator = " " if part.lower().startswith("for ") else ", "
+        proposed = f"{result}{separator}{part}" if result else part
         if len(proposed) <= limit:
             result = proposed
-    return result
+    return _normalize_title_punctuation(result)
 
 
 def _selected_keywords(
@@ -580,12 +773,32 @@ def _style_parts(value: str | None) -> list[str]:
     return result
 
 
+def _matches_category_phrase(term: str, category: str) -> bool:
+    term_tokens = _tokens(term)
+    category_tokens = _tokens(category)
+    return bool(category_tokens) and len(term_tokens & category_tokens) >= min(2, len(category_tokens))
+
+
 def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
     brand = _clean_brand(request.brand, request.product_title)
     features = _features(request)
     colors: list[str | None] = request.colors or [None]
     sizes: list[str | None] = request.sizes or [_extract_size(request.product_title)]
-    scenarios = [_scenario(size, request.category) for size in sizes]
+    scenarios = []
+    max_keyword_volume = max((item.volume or 0 for item in request.keywords), default=0)
+    for size in sizes:
+        exact_titles = request.competitor_titles_by_size.get(size or "", [])
+        weighted_keywords = [
+            item.term
+            for item in request.keywords
+            for _ in range(1 + (round(4 * (item.volume or 0) / max_keyword_volume) if max_keyword_volume else 0))
+        ]
+        scene_evidence = [
+            *(exact_titles or request.competitor_titles),
+            *weighted_keywords,
+            request.use_case or "",
+        ]
+        scenarios.append(_scenario(size, request.category, scene_evidence))
     competitor_terms = _competitor_terms(request, features)
     keyword_analysis = _keyword_analysis(request, scenarios, features, competitor_terms)
     selected_keywords = _selected_keywords(request, keyword_analysis)
@@ -632,7 +845,9 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
     for color in colors:
         for size, scenario in zip(sizes, scenarios):
             category = scenario.product_type
-            title_size = None if (size or "").strip().lower() in {"尺寸未识别", "unknown", "n/a"} else size
+            cleaned_size = _clean_variant_value(size)
+            title_size = None if (cleaned_size or "").strip().lower() in {"尺寸未识别", "unknown", "n/a"} else cleaned_size
+            title_color = _clean_variant_value(color, color=True)
             styles = _style_parts(request.style)
             (
                 size_competitor_titles, size_competitor_terms, size_keyword_analysis,
@@ -642,22 +857,32 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 (
                     item.term for item in size_competitor_terms
                     if item.recommended_placement == "main"
-                    and re.search(r"\b(?:area|runner|accent)\s+rugs?\b", item.term, re.I)
+                    and _matches_category_phrase(item.term, category)
                 ),
                 None,
             )
             main_terms = size_selected_keywords["main"]
             highlight_terms = size_selected_keywords["highlight"]
             primary_keyword = next(
-                (item for item in main_terms if re.search(r"\b(?:area|runner|accent)\s+rugs?\b", item.term, re.I)),
+                (item for item in main_terms if _matches_category_phrase(item.term, category)),
                 main_terms[0] if main_terms else None,
             )
             scene_keyword = next(
                 (item for item in main_terms if any(scene in item.term.lower() for scene in SCENE_WORDS)),
                 None,
             )
+            main_scenes, highlight_scenes = _market_scene_slots(
+                scenario, size_competitor_titles, size_keyword_analysis,
+            )
             scene_part = _keyword_scene(scene_keyword.term) if scene_keyword and scene_keyword is not primary_keyword else None
+            if not scene_part and main_scenes:
+                scene_part = main_scenes[0]
             category_part = _display_phrase(primary_keyword.term) if primary_keyword else category
+            if scene_part and scene_part.lower() in category_part.lower():
+                scene_part = None
+            color_early = _color_goes_early(
+                title_color, size_competitor_titles, size_keyword_analysis,
+            )
             formula_slots = re.findall(
                 r"\b(?:Brand|Category|Feature|Style|Material|Scene|Size)\b",
                 size_competitor_analysis.dominant_formula,
@@ -669,7 +894,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 "Style": styles[:1],
                 "Material": [request.material],
                 "Scene": [scene_part or (scenario.primary_scenes[0] if scenario.primary_scenes else None)],
-                "Size": [title_size, color],
+                "Size": [title_size, title_color],
             }
             ordered_descriptors = [
                 part for slot in formula_slots
@@ -677,25 +902,26 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                 for part in slot_values.get(slot, [])
             ]
             traffic_blocks = [
-                [brand, category_part],
-                [scene_part, *styles[:1], *features[:1]],
-                [*features[1:2]],
-                [title_size, color],
+                [brand, title_color if color_early else None, category_part],
+                [*styles[:1], *features[:1], f"for {scene_part}" if scene_part else None],
+                [*features[1:2], request.material],
+                [title_size, None if color_early else title_color],
             ]
             click_blocks = [
-                [brand, category_part],
-                [features[0] if features else None, *styles[:1]],
-                [scene_part, *features[1:2]],
-                [title_size, color],
+                [brand, title_color if color_early else None, category_part],
+                [features[0] if features else None, *styles[:1], f"for {scene_part}" if scene_part else None],
+                [*features[1:2], request.material],
+                [title_size, None if color_early else title_color],
             ]
             balanced_blocks = [
-                [brand, category_part],
+                [brand, title_color if color_early else None, category_part],
                 [
                     *ordered_descriptors[:3],
                     _display_phrase(size_market_phrase) if size_market_phrase else None,
+                    f"for {scene_part}" if scene_part else None,
                 ],
                 ordered_descriptors[3:5],
-                [title_size, color],
+                [title_size, None if color_early else title_color],
             ]
             structures = [
                 ("traffic", traffic_blocks),
@@ -706,22 +932,48 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
             for strategy, blocks in structures:
                 if request.title_format == "split":
                     main = _compose_main_blocks(blocks, 75, claim_patterns)
+                    main = _normalize_title_punctuation(main)
+                    main_optional = [
+                        *(_display_phrase(item.term) for item in main_terms),
+                        *styles,
+                        *features,
+                        request.material or "",
+                        title_size or "",
+                        title_color or "",
+                    ]
+                    main = _best_length_fit(
+                        [main], main_optional, 70, 75, claim_patterns,
+                    )
                     material_phrase = " ".join([
                         *_style_parts(request.material),
                         "Surface" if "rug" in category.lower() else "",
                     ]).strip()
-                    feature_phrase = " ".join(features[1:]).strip()
-                    scenes = list(dict.fromkeys([
-                        *scenario.primary_scenes, *scenario.secondary_scenes,
-                    ]))[:4]
-                    highlight_parts = [
-                        material_phrase,
-                        feature_phrase,
-                        f"for {', '.join(scenes)}" if scenes else "",
+                    feature_phrase = " ".join(features).strip()
+                    remaining_scenes = highlight_scenes or [
+                        scene for scene in [*scenario.primary_scenes, *scenario.secondary_scenes]
+                        if scene not in main_scenes
+                    ][:3]
+                    scene_phrase = f"for {_join_scenes(remaining_scenes)}" if remaining_scenes else ""
+                    highlight_required = [material_phrase, feature_phrase]
+                    highlight_optional = [
+                        *(_display_phrase(item.term) for item in highlight_terms),
+                        *request.must_have,
+                        *request.verified_improvements,
+                        *styles,
+                        request.material or "",
+                        request.use_case or "",
+                        *(_display_phrase(item.term) for item in size_keyword_analysis if item.recommended_placement == "highlight"),
                     ]
-                    highlight = _compact_highlight(
-                        highlight_parts, existing=main, claim_patterns=claim_patterns,
+                    scene_suffix_length = len(scene_phrase) + 1 if scene_phrase else 0
+                    highlight = _best_length_fit(
+                        highlight_required, highlight_optional,
+                        max(1, 120 - scene_suffix_length),
+                        125 - scene_suffix_length,
+                        claim_patterns, existing=main,
                     )
+                    if scene_phrase:
+                        highlight = f"{highlight} {scene_phrase}".strip()
+                    highlight = _normalize_title_punctuation(highlight)
                     full = f"{main} | {highlight}"
                 else:
                     highlight = None
@@ -737,7 +989,7 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                     sentence = _compact_highlight([
                         material_phrase,
                         feature_phrase,
-                        f"for {', '.join(scenes)}" if scenes else "",
+                        f"for {_join_scenes(scenes)}" if scenes else "",
                     ], existing=main, claim_patterns=claim_patterns)
                     if sentence and len(f"{main}, {sentence}") <= 200:
                         main = f"{main}, {sentence}"
@@ -768,6 +1020,10 @@ def generate_titles(request: TitleGenerateRequest) -> TitleGenerateResult:
                     warnings.append("已确认风格未进入标题，请缩减低优先级属性或人工指定风格关键词。")
                 if any(connector in full.lower().split() for connector in LOW_VALUE_CONNECTORS):
                     warnings.append("连接词仅因已选关键词或必要语法保留，请人工确认其流量价值。")
+                if request.title_format == "split" and not 70 <= len(main) <= 75:
+                    warnings.append("本品可验证事实不足以自然填满 70–75 字符，请补充材质、风格或真实卖点后再定稿。")
+                if request.title_format == "split" and not 120 <= len(highlight or "") <= 125:
+                    warnings.append("本品可验证事实不足以自然填满 120–125 字符，请补充真实功能或用途证据后再定稿。")
                 base_score = {"traffic": 88, "click": 86, "balanced": 90}[strategy]
                 coverage_score = min(10, len(used) * 3)
                 candidates.append(TitleCandidate(

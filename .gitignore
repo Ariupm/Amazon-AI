@@ -44,3 +44,9 @@ next-env.d.ts
 *.scrape.json
 __pycache__/
 *.pyc
+
+# local package/cache and generated diagnostics
+/.pnpm-store/
+*.log
+*.tsbuildinfo
+/sites-version-*.tar.gz

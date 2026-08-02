@@ -21,8 +21,8 @@ from .keyword_files import inspect_keyword_file, inspect_negative_file
 from .scraper import BrowserSession, ScrapeError, scrape_product
 from .title_generator import generate_titles
 
-FEATURE_VERSION = "natural-title-composition-v24"
-app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.24.0")
+FEATURE_VERSION = "category-aware-size-scenes-v26"
+app = FastAPI(title="采数 Amazon 真实数据采集器", version="1.26.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -39,6 +39,35 @@ app.add_middleware(
 static = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static), name="static")
 lock = asyncio.Lock()
+browser_session: BrowserSession | None = None
+browser_session_key: tuple[str, bool] | None = None
+
+
+async def shared_browser(marketplace: str, headless: bool) -> BrowserSession:
+    """Keep Chrome alive until the local scraper service is stopped."""
+    global browser_session, browser_session_key
+    key = (marketplace, headless)
+    context_alive = (
+        browser_session is not None
+        and browser_session.context is not None
+        and any(not page.is_closed() for page in browser_session.context.pages)
+    )
+    if browser_session_key != key or not context_alive:
+        if browser_session:
+            await browser_session.close()
+        browser_session = BrowserSession(marketplace, headless)
+        await browser_session.start()
+        browser_session_key = key
+    return browser_session
+
+
+@app.on_event("shutdown")
+async def close_shared_browser() -> None:
+    global browser_session, browser_session_key
+    if browser_session:
+        await browser_session.close()
+    browser_session = None
+    browser_session_key = None
 
 
 @app.middleware("http")
@@ -70,9 +99,12 @@ async def scrape(request: ScrapeRequest):
         raise HTTPException(status_code=409, detail="已有采集任务正在运行，请等待完成。")
     async with lock:
         try:
+            session = await shared_browser(request.marketplace, request.headless)
+            assert session.context is not None
             return await scrape_product(
                 request.asin, request.marketplace, request.max_review_pages,
                 request.headless, request.variant_mode,
+                context=session.context,
             )
         except ScrapeError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -89,21 +121,21 @@ async def scrape_batch(request: BatchScrapeRequest) -> BatchResult:
         raise HTTPException(status_code=422, detail="没有可采集的 ASIN。")
     items: list[BatchItemResult] = []
     async with lock:
-        async with BrowserSession(request.marketplace, request.headless) as session:
-            assert session.context is not None
-            for asin in normalized:
-                if len(asin) != 10 or not asin.isalnum():
-                    items.append(BatchItemResult(requested_asin=asin, success=False, error="ASIN 格式错误"))
-                    continue
-                try:
-                    result = await scrape_product(
-                        asin, request.marketplace, request.max_review_pages,
-                        request.headless, request.variant_mode,
-                        context=session.context,
-                    )
-                    items.append(BatchItemResult(requested_asin=asin, success=True, result=result))
-                except Exception as error:
-                    items.append(BatchItemResult(requested_asin=asin, success=False, error=str(error)))
+        session = await shared_browser(request.marketplace, request.headless)
+        assert session.context is not None
+        for asin in normalized:
+            if len(asin) != 10 or not asin.isalnum():
+                items.append(BatchItemResult(requested_asin=asin, success=False, error="ASIN 格式错误"))
+                continue
+            try:
+                result = await scrape_product(
+                    asin, request.marketplace, request.max_review_pages,
+                    request.headless, request.variant_mode,
+                    context=session.context,
+                )
+                items.append(BatchItemResult(requested_asin=asin, success=True, result=result))
+            except Exception as error:
+                items.append(BatchItemResult(requested_asin=asin, success=False, error=str(error)))
     succeeded = sum(item.success for item in items)
     return BatchResult(items=items, total=len(items), succeeded=succeeded, failed=len(items) - succeeded)
 
@@ -123,11 +155,11 @@ async def competitor_discovery(request: CompetitorDiscoverRequest) -> Competitor
     if lock.locked():
         raise HTTPException(status_code=409, detail="已有采集任务正在运行，请等待完成。")
     async with lock:
-        async with BrowserSession(request.marketplace, request.headless) as session:
-            assert session.context is not None
-            try:
-                return await discover_competitors(
-                    session.context, request.asin, request.marketplace,
+        session = await shared_browser(request.marketplace, request.headless)
+        assert session.context is not None
+        try:
+            return await discover_competitors(
+                session.context, request.asin, request.marketplace,
                     request.limit, request.headless, request.category,
                     request.material, request.style, request.use_case,
                     request.features, request.search_queries, request.brand,
@@ -137,13 +169,13 @@ async def competitor_discovery(request: CompetitorDiscoverRequest) -> Competitor
                     request.verify_detail_pages, request.product_type,
                     request.direct_competitor_definition, request.excluded_terms,
                     request.search_query_weights,
-                )
-            except ScrapeError as error:
-                raise HTTPException(status_code=422, detail=str(error)) from error
-            except ValueError as error:
-                raise HTTPException(status_code=422, detail=str(error)) from error
-            except Exception as error:
-                raise HTTPException(status_code=500, detail=f"竞品发现失败：{error}") from error
+            )
+        except ScrapeError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except Exception as error:
+            raise HTTPException(status_code=500, detail=f"竞品发现失败：{error}") from error
 
 
 @app.post("/api/competitors/plan", response_model=CompetitorPlanResult)

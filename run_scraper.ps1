@@ -5,7 +5,7 @@ $port = 8765
 $webPort = 3000
 $healthUrl = "http://127.0.0.1:$port/health"
 $openApiUrl = "http://127.0.0.1:$port/openapi.json"
-$requiredFeatureVersion = "natural-title-composition-v24"
+$requiredFeatureVersion = "category-aware-size-scenes-v26"
 
 # Port 3000 may belong to another local project (for example the comic
 # workspace). Never stop an unrelated service; fall back to 3001 instead.
@@ -130,7 +130,7 @@ try {
         throw "本地标题工作台未能在端口 $webPort 正确启动。"
     }
     Start-Process $pageUrl
-    Write-Host "标题工作台 V24 已在 $pageUrl 启动。关闭此窗口可停止服务。" -ForegroundColor Green
+    Write-Host "标题工作台 V26 已在 $pageUrl 启动。关闭此窗口可停止服务。" -ForegroundColor Green
     Wait-Process -Id $server.Id
 } finally {
     if (Get-Process -Id $server.Id -ErrorAction SilentlyContinue) {

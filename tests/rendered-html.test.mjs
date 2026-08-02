@@ -70,6 +70,9 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /人工可手动赋予权重/);
   assert.match(workspace, /search_query_weights/);
   assert.match(workspace, /确认方案并搜索竞品/);
+  assert.match(workspace, /mainChildAsin \|\| selectedChildAsins\[0\]/);
+  assert.match(workspace, /discoverPrimaryButton/);
+  assert.match(workspace, /详情页复核/);
   assert.match(workspace, /api\/competitors\/plan/);
   assert.match(workspace, /每个竞品品牌只保留 1 款/);
   assert.match(workspace, /市场价值优先排序/);
@@ -77,7 +80,7 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /同品牌合并/);
   assert.match(workspace, /exclude_asins/);
   assert.match(workspace, /导出全部 XLSX/);
-  assert.match(workspace, /natural-title-composition-v24/);
+  assert.match(workspace, /category-aware-size-scenes-v26/);
   assert.match(workspace, /最终候选上限/);
   assert.match(workspace, /本轮候选漏斗/);
   assert.match(workspace, /verify_detail_pages/);
@@ -92,6 +95,12 @@ test("title workspace starts from real inputs without fake competitors", async (
   assert.match(workspace, /api\/keywords\/inspect/);
   assert.match(workspace, /api\/titles\/generate/);
   assert.match(workspace, /生成标题候选/);
+  assert.match(workspace, /批量子体优化/);
+  assert.match(workspace, /selectedChildAsins/);
+  assert.match(workspace, /需要批量优化的子体 ASIN/);
+  assert.match(workspace, /批量读取子体资料/);
+  assert.match(workspace, /requestedAsins/);
+  assert.match(workspace, /不会把颜色与尺寸交叉组合/);
   assert.match(workspace, /复制完整标题/);
   assert.match(workspace, /新增颜色或新增尺寸至少填写一项/);
   assert.match(workspace, /查看待完成项/);
@@ -108,9 +117,16 @@ test("renders child bullets with a product fallback", async () => {
 
 test("launcher replaces stale competitor-discovery servers", async () => {
   const launcher = await readFile(new URL("../run_scraper.ps1", import.meta.url), "utf8");
-  assert.match(launcher, /natural-title-composition-v24/);
+  assert.match(launcher, /category-aware-size-scenes-v26/);
   assert.match(launcher, /检测到旧版抓取器/);
   assert.match(launcher, /netstat -ano/);
   assert.match(launcher, /Get-ListenerProcessId/);
   assert.doesNotMatch(launcher, /if \(\$hasBatchApi\)/);
+});
+
+test("prevents stale HTML from referencing removed hashed assets", async () => {
+  const worker = await readFile(new URL("../worker/index.ts", import.meta.url), "utf8");
+  assert.match(worker, /contentType\.includes\("text\/html"\)/);
+  assert.match(worker, /Cache-Control", "no-store, max-age=0"/);
+  assert.match(worker, /CDN-Cache-Control", "no-store"/);
 });

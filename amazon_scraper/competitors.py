@@ -14,7 +14,7 @@ from playwright.async_api import BrowserContext
 from .models import CompetitorCandidate, CompetitorDiscoverResult, CompetitorPlanResult
 from .scraper import (
     MARKETPLACES, _challenge, _extract_variants, _monthly_sales_estimate,
-    _number, _parent_asin, _rating, _snapshot, _text,
+    _number, _parent_asin, _rating, _snapshot, _text, goto_with_retry,
 )
 
 STOPWORDS = {
@@ -415,7 +415,9 @@ async def discover_competitors(
     base_url, _ = MARKETPLACES[marketplace]
     page = context.pages[0] if context.pages else await context.new_page()
     if asin:
-        await page.goto(f"{base_url}/dp/{asin.upper()}", wait_until="domcontentloaded", timeout=60_000)
+        await goto_with_retry(
+            page, f"{base_url}/dp/{asin.upper()}", purpose="本品页面"
+        )
         await _challenge(page, headless, "本品页面")
         target = await _snapshot(page, base_url, asin.upper())
     else:
@@ -483,9 +485,10 @@ async def discover_competitors(
     excluded_by_terms = 0
     for query in search_queries:
         for search_page in range(1, search_pages + 1):
-            await page.goto(
+            await goto_with_retry(
+                page,
                 f"{base_url}/s?k={quote_plus(query)}&page={search_page}",
-                wait_until="domcontentloaded", timeout=60_000,
+                purpose=f"竞品搜索页面（{query}，第 {search_page} 页）",
             )
             await _challenge(page, headless, "竞品搜索页面")
             await page.wait_for_timeout(500)
@@ -628,7 +631,9 @@ async def discover_competitors(
         eligible = eligible[: min(20, max(12, limit))]
         for item in eligible:
             try:
-                await page.goto(item["url"], wait_until="domcontentloaded", timeout=60_000)
+                await goto_with_retry(
+                    page, item["url"], purpose=f"竞品详情页面 {item['asin']}"
+                )
                 await _challenge(page, headless, "竞品详情页面")
                 detail = await _snapshot(page, base_url, item["asin"])
                 item["parent_asin"] = await _parent_asin(page)

@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8765";
-const REQUIRED_BACKEND = "natural-title-composition-v24";
+const REQUIRED_BACKEND = "category-aware-size-scenes-v26";
 
 type Candidate = {
   asin: string; parent_asin?: string; brand?: string; size?: string;
@@ -29,7 +29,7 @@ type Product = {
   }[];
 };
 type TaskMode = "optimize" | "new-variant" | "new-product";
-type OptimizeScope = "family" | "single";
+type OptimizeScope = "family" | "batch" | "single";
 type TitleFormat = "classic" | "split";
 type KeywordSummary = {
   filename: string; sheet: string; valid: boolean; rows: number;
@@ -38,7 +38,7 @@ type KeywordSummary = {
   keywords: { term: string; volume?: number; month?: string }[];
 };
 type GeneratedTitle = {
-  id: string; color?: string; size?: string; main_title: string;
+  id: string; target_asin?: string; color?: string; size?: string; main_title: string;
   highlight_item?: string; full_title: string; main_count: number;
   highlight_count: number; full_count: number; keywords_used: string[];
   warnings: string[];
@@ -97,9 +97,11 @@ export default function MarketWorkspace() {
   const [optimizeScope, setOptimizeScope] = useState<OptimizeScope>("family");
   const [titleFormat, setTitleFormat] = useState<TitleFormat>("split");
   const [asin, setAsin] = useState("");
+  const [batchChildAsins, setBatchChildAsins] = useState("");
   const [marketplace, setMarketplace] = useState("US");
   const [product, setProduct] = useState<Product | null>(null);
   const [mainChildAsin, setMainChildAsin] = useState("");
+  const [selectedChildAsins, setSelectedChildAsins] = useState<string[]>([]);
   const [imagePreview, setImagePreview] = useState("");
   const [imageData, setImageData] = useState("");
   const [facts, setFacts] = useState({ brand: "", productName: "", category: "", material: "", style: "", useCase: "", mustHave: "" });
@@ -163,10 +165,15 @@ export default function MarketWorkspace() {
       const chosen = product?.variants.find(item => item.asin === mainChildAsin);
       return chosen ? [chosen.size?.trim() || "尺寸未识别"] : [];
     }
+    if (optimizeScope === "batch") {
+      return (product?.variants || [])
+        .filter(item => selectedChildAsins.includes(item.asin))
+        .map(item => item.size?.trim() || "尺寸未识别");
+    }
     return optimizeVariants.map(item => item.size?.trim() || "尺寸未识别");
-  }, [optimizeScope, optimizeVariants, product, mainChildAsin]);
+  }, [optimizeScope, optimizeVariants, product, mainChildAsin, selectedChildAsins]);
   const titleCount = taskMode === "optimize"
-    ? Math.max(1, optimizeSizes.length)
+    ? optimizeScope === "batch" ? selectedChildAsins.length : Math.max(1, optimizeSizes.length)
     : Math.max(1, colors.length) * Math.max(1, sizes.length);
   const newProductReady = taskMode === "new-product" && !!facts.category.trim() && !!facts.material.trim() && !!facts.style.trim() && !!facts.mustHave.trim() && sizes.length > 0;
   const sourceReady = taskMode === "new-product" ? newProductReady : !!product;
@@ -182,11 +189,15 @@ export default function MarketWorkspace() {
 
   function inferCategory(title: string) {
     const normalized = title.toLowerCase();
+    if (/\bdish drying mats?\b/.test(normalized)) return "Dish Drying Mat";
+    if (/\bcoffee mats?\b/.test(normalized)) return "Coffee Mat";
+    if (/\bbath mats?\b/.test(normalized)) return "Bath Mat";
+    if (/\bdoor mats?\b|\bdoormats?\b/.test(normalized)) return "Door Mat";
     if (/\brunner rugs?\b/.test(normalized)) return "Runner Rug";
     if (/\bround (?:area )?rugs?\b/.test(normalized)) return "Round Area Rug";
     if (/\baccent rugs?\b/.test(normalized)) return "Accent Rug";
     if (/\barea rugs?\b/.test(normalized)) return "Area Rug";
-    if (/\brugs?\b/.test(normalized)) return "Area Rug";
+    if (/\brugs?\b/.test(normalized)) return "Rug";
     return "";
   }
 
@@ -335,7 +346,14 @@ export default function MarketWorkspace() {
 
   async function readProduct(event: FormEvent) {
     event.preventDefault();
-    if (!/^[A-Z0-9]{10}$/.test(asin)) {
+    const requestedAsins = optimizeScope === "batch" && taskMode === "optimize"
+      ? [...new Set(batchChildAsins.toUpperCase().split(/[\s,，;；]+/).map(value => value.trim()).filter(Boolean))]
+      : [asin];
+    if (!requestedAsins.length || requestedAsins.length > 100 || requestedAsins.some(value => !/^[A-Z0-9]{10}$/.test(value))) {
+      if (optimizeScope === "batch" && taskMode === "optimize") {
+        setSourceMessage("请粘贴 1–100 个有效的 10 位子体 ASIN，可按行、空格或逗号分隔。");
+        return;
+      }
       setSourceMessage(`请输入有效的 10 位${taskMode === "optimize" ? "父体或子体" : taskMode === "new-variant" ? "父体" : "子体"} ASIN。`);
       return;
     }
@@ -346,17 +364,35 @@ export default function MarketWorkspace() {
       setSourceMessage("本机抓取器版本正确，正在打开 Chrome 读取 Amazon 真实页面…");
       const response = await fetch(`${API}/api/scrape/batch`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: [asin], marketplace, max_review_pages: 0, headless: false, variant_mode: "fast" }),
+        body: JSON.stringify({ asins: requestedAsins, marketplace, max_review_pages: 0, headless: false, variant_mode: "fast" }),
       });
       const batch = await response.json();
-      if (!response.ok || !batch.items?.[0]?.success) throw new Error(batch.detail || batch.items?.[0]?.error || "读取失败");
-      const loadedProduct = batch.items[0].result as Product;
+      const successfulItems = (batch.items || []).filter((item: {success:boolean;result?:Product}) => item.success && item.result);
+      if (!response.ok || !successfulItems.length) throw new Error(batch.detail || batch.items?.[0]?.error || "读取失败");
+      const loadedProducts = successfulItems.map((item: {result:Product}) => item.result);
+      const firstProduct = loadedProducts[0];
+      const variantMap = new Map<string, Product["variants"][number]>();
+      loadedProducts.forEach(current => {
+        current.variants.forEach(variant => variantMap.set(variant.asin, variant));
+        if (!variantMap.has(current.asin)) {
+          variantMap.set(current.asin, {
+            asin: current.asin, title: current.title, image: current.images[0],
+            price: current.price, url: "", bullets: current.bullets,
+          });
+        }
+      });
+      const loadedProduct: Product = {...firstProduct, variants:[...variantMap.values()]};
       const recommended = recommendedMainChild(loadedProduct);
-      const factTitle = taskMode === "optimize" ? recommended?.title || loadedProduct.title : loadedProduct.title;
-      const factBullets = taskMode === "optimize" ? recommended?.bullets || loadedProduct.bullets || [] : loadedProduct.bullets || [];
+      const firstRequestedVariant = loadedProduct.variants.find(variant => requestedAsins.includes(variant.asin));
+      const factVariant = optimizeScope === "batch" ? firstRequestedVariant : recommended;
+      const factTitle = taskMode === "optimize" ? factVariant?.title || loadedProduct.title : loadedProduct.title;
+      const factBullets = taskMode === "optimize" ? factVariant?.bullets || loadedProduct.bullets || [] : loadedProduct.bullets || [];
       const inferred = inferProductFacts(factTitle, factBullets);
       setProduct(loadedProduct);
-      setMainChildAsin(taskMode === "optimize" ? recommended?.asin || loadedProduct.asin : "");
+      setMainChildAsin(taskMode === "optimize" ? factVariant?.asin || loadedProduct.asin : "");
+      setSelectedChildAsins(taskMode === "optimize" && optimizeScope === "batch"
+        ? requestedAsins.filter(value => variantMap.has(value))
+        : taskMode === "optimize" && recommended ? [recommended.asin] : []);
       setFacts(current => ({
         ...current,
         brand: current.brand || loadedProduct.brand || "",
@@ -373,6 +409,8 @@ export default function MarketWorkspace() {
         : taskMode === "optimize"
           ? optimizeScope === "family"
             ? `父体读取完成：识别 ${loadedProduct.variants.length} 个子体、${new Set(loadedProduct.variants.map(item => item.size).filter(Boolean)).size} 个尺寸。系统已按公开月销量信号推荐主推子体；请人工确认。`
+            : optimizeScope === "batch"
+              ? `批量读取完成：成功读取 ${successfulItems.length}/${requestedAsins.length} 个子体 ASIN，并已自动勾选本轮目标。${successfulItems.length < requestedAsins.length ? " 未成功的 ASIN 请核对后重试。" : ""}`
             : `子体读取完成：本轮只优化所选子体。若 Amazon 同时返回家族数据，仍不会批量生成其他尺寸。`
           : `该子体资料已读取，并从标题和五点回填 ${inferredCount} 组商品事实。请确认后再发现竞品。`);
     } catch (error) {
@@ -437,7 +475,10 @@ export default function MarketWorkspace() {
   }
 
   async function discover() {
-    if (taskMode !== "new-product" && !/^[A-Z0-9]{10}$/.test(asin)) return setMessage("自动发现需要先输入并读取本品 ASIN。");
+    const targetAsin = taskMode === "new-product"
+      ? ""
+      : mainChildAsin || selectedChildAsins[0] || product?.asin || asin;
+    if (taskMode !== "new-product" && !/^[A-Z0-9]{10}$/.test(targetAsin)) return setMessage("自动发现需要先输入并读取本品 ASIN。");
     if (taskMode === "new-product" && !newProductReady) return setMessage("全新商品请先完整填写类目、材质、风格、产品特征和至少一个尺寸。");
     if (!searchPlan) return setMessage("请先生成并确认竞品搜索方案。");
     const activeQueries = weightedQueries.filter(item => item.enabled && item.query.trim() && item.weight > 0);
@@ -448,7 +489,7 @@ export default function MarketWorkspace() {
       const response = await fetch(`${API}/api/competitors/discover`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          asin: taskMode === "new-product" ? null : asin,
+          asin: taskMode === "new-product" ? null : targetAsin,
           ...competitorSourcePayload(),
           reference_image_data: taskMode === "new-product" ? imageData || null : null,
           marketplace, limit: resultLimit, search_pages: searchPages,
@@ -614,6 +655,7 @@ export default function MarketWorkspace() {
     !sourceReady ? taskMode === "new-product" ? "全新商品资料未填写完整" : "尚未读取本品" : "",
     !confirmed ? "尚未确认并锁定竞品" : "",
     taskMode === "new-variant" && !colors.length && !sizes.length ? "新增颜色或新增尺寸至少填写一项" : "",
+    taskMode === "optimize" && optimizeScope === "batch" && !selectedChildAsins.length ? "批量子体尚未选择" : "",
     !abaSummary?.valid ? "ABA 综合词库尚未通过读取校验" : "",
   ].filter(Boolean);
 
@@ -642,10 +684,10 @@ export default function MarketWorkspace() {
     setTimeout(() => document.getElementById("title-research")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   }
 
-  function titleRequestPayload(includeSelections = true) {
+  function titleRequestPayload(includeSelections = true, targetVariant?: Product["variants"][number]) {
     const confirmedImprovements = painInsights.filter(item => item.confirmed && item.improvement.trim()).map(item => item.improvement.trim());
-    const mainVariant = product?.variants.find(item => item.asin === mainChildAsin);
-    const targetSizes = taskMode === "optimize" ? optimizeSizes : sizes;
+    const mainVariant = targetVariant || product?.variants.find(item => item.asin === mainChildAsin);
+    const targetSizes = targetVariant ? [targetVariant.size?.trim() || "尺寸未识别"] : taskMode === "optimize" ? optimizeSizes : sizes;
     const normalizeSize = (value?: string) => (value || "").toLowerCase().replace(/[×’′"]/g, "x").replace(/\s+/g, "");
     const competitorTitlesBySize = Object.fromEntries(targetSizes.map(size => {
       const exact = selected.filter(item => normalizeSize(item.size) && normalizeSize(item.size) === normalizeSize(size));
@@ -666,7 +708,7 @@ export default function MarketWorkspace() {
       use_case: facts.useCase || null,
       must_have: facts.mustHave.split(/[,，\n]+/).map(value => value.trim()).filter(Boolean),
       verified_improvements: confirmedImprovements,
-      colors: taskMode === "optimize" ? [] : colors,
+      colors: targetVariant ? [targetVariant.color || ""] : taskMode === "optimize" ? [] : colors,
       sizes: targetSizes,
       title_format: titleFormat,
     };
@@ -684,7 +726,7 @@ export default function MarketWorkspace() {
           main_child_asin: mainChildAsin || null,
           title_format: titleFormat,
           items: generatedTitles.map(item => ({
-            asin: optimizeVariants.find(variant => (variant.size?.trim() || "尺寸未识别") === (item.size || "尺寸未识别"))?.asin || null,
+            asin: item.target_asin || optimizeVariants.find(variant => (variant.size?.trim() || "尺寸未识别") === (item.size || "尺寸未识别"))?.asin || null,
             size: item.size || "尺寸未识别", strategy: item.strategy,
             main_title: item.main_title, highlight_item: item.highlight_item || null,
             full_title: item.full_title, score: item.score,
@@ -801,14 +843,31 @@ export default function MarketWorkspace() {
     setMessage("正在按本品真实属性、已锁定竞品结构和 ABA 流量词生成标题候选…");
     try {
       await ensureCurrentBackend();
-      const response = await fetch(`${API}/api/titles/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(titleRequestPayload(true)),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.detail || "标题生成失败");
-      setGeneratedTitles(result.candidates || []);
+      const batchTargets = taskMode === "optimize" && optimizeScope === "batch"
+        ? (product?.variants || []).filter(item => selectedChildAsins.includes(item.asin))
+        : [];
+      const requests = batchTargets.length ? batchTargets : [undefined];
+      const results = await Promise.all(requests.map(async target => {
+        const response = await fetch(`${API}/api/titles/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(titleRequestPayload(true, target)),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `${target?.asin || ""} 标题生成失败`);
+        return { result, target };
+      }));
+      const result = results[0].result;
+      const candidates = results.flatMap(({result: itemResult, target}) =>
+        (itemResult.candidates || []).map((item: GeneratedTitle) => ({
+          ...item,
+          id: target ? `${target.asin}-${item.id}` : item.id,
+          target_asin: target?.asin,
+          color: target?.color || item.color,
+          size: target?.size || item.size,
+        }))
+      );
+      setGeneratedTitles(candidates);
       setTrafficKeywords(result.traffic_keywords || []);
       setKeywordAnalysis(result.keyword_analysis || []);
       setSizeScenarios(result.size_scenarios || []);
@@ -816,7 +875,7 @@ export default function MarketWorkspace() {
       setCompetitorTerms(result.competitor_terms || []);
       setSemanticClusters(result.semantic_clusters || []);
       setSizeCompetitorStudies(result.size_competitor_studies || []);
-      setMessage(`已生成 ${result.candidates?.length || 0} 个真实标题候选，请逐条编辑和人工确认。`);
+      setMessage(`已生成 ${candidates.length} 个真实标题候选，请逐条编辑和人工确认。`);
       setTimeout(() => document.getElementById("generated-titles")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "标题生成失败");
@@ -871,14 +930,20 @@ export default function MarketWorkspace() {
           <div className="panelHead"><div><h3>2. 获取本品真实资料</h3><p>{taskMode === "new-product" ? "暂无 ASIN：使用产品部资料建立事实画像，并由图片参与真实视觉比对" : taskMode === "new-variant" ? "读取父体和现有子体，提炼同系列可继承的标题骨架与真实卖点" : "优先读取父体全部子体；按月销量信号推荐主推款，并为每个尺寸生成标题"}</p></div><span className="requiredMark">{taskMode === "new-product" ? "产品事实必填" : "ASIN 必填"}</span></div>
           <div className="sourceGrid">
             {taskMode === "new-product" ? <div className="newProductSource"><b>全新商品资料入口</b><p>搜索与评分只使用你确认的真实资料。品牌和产品名称可选，但类目、材质、风格、产品特征与尺寸必填。</p><label>目标站点<select value={marketplace} onChange={e => {setMarketplace(e.target.value);resetDiscovery();}}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select></label><small>{newProductReady ? "✓ 核心资料已完整，可以发现竞品" : "请继续填写下方标有“新品必填”的字段"}</small></div> :
-            <form className="asinSource" onSubmit={readProduct}>{taskMode === "optimize" && <div className="optimizeScopeSwitch"><button type="button" className={optimizeScope === "family" ? "selected" : ""} onClick={() => {setOptimizeScope("family");resetDiscovery();}}><b>父体批量优化</b><small>一次处理全部尺寸</small></button><button type="button" className={optimizeScope === "single" ? "selected" : ""} onClick={() => {setOptimizeScope("single");resetDiscovery();}}><b>单子体优化</b><small>只修改一个商品</small></button></div>}<label>{taskMode === "new-variant" ? "父体 ASIN" : optimizeScope === "single" ? "需要修改的子体 ASIN" : "父体 ASIN"}</label><div className="asinActionRow"><input value={asin} maxLength={10} onChange={e => {setAsin(e.target.value.toUpperCase().replace(/\s/g, ""));setProduct(null);setMainChildAsin("");resetDiscovery();}} placeholder="例如 B0XXXXXXXX" /><select value={marketplace} onChange={e => {setMarketplace(e.target.value);resetDiscovery();}}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select><button className="readProductButton" disabled={loading === "product"}>{loading === "product" ? "正在读取…" : taskMode === "new-variant" ? "读取父体资料 →" : optimizeScope === "single" ? "读取子体资料 →" : "读取父体资料 →"}</button></div>{product && <div className="targetMini">{product.images[0] && <img src={product.images[0]} alt="" />}<span><b>{product.title}</b><small>{product.asin} · {product.price || "价格未展示"} · 五点 {product.bullets.length} 条{taskMode !== "new-product" ? ` · 已读取 ${product.variants.length} 个子体；这些 ASIN 会全部排除` : ""}</small></span></div>}</form>}
+            <form className="asinSource" onSubmit={readProduct}>{taskMode === "optimize" && <div className="optimizeScopeSwitch"><button type="button" className={optimizeScope === "family" ? "selected" : ""} onClick={() => {setOptimizeScope("family");resetDiscovery();}}><b>父体批量优化</b><small>一次处理全部尺寸</small></button><button type="button" className={optimizeScope === "batch" ? "selected" : ""} onClick={() => {setOptimizeScope("batch");resetDiscovery();}}><b>批量子体优化</b><small>直接粘贴多个子体 ASIN</small></button><button type="button" className={optimizeScope === "single" ? "selected" : ""} onClick={() => {setOptimizeScope("single");resetDiscovery();}}><b>单子体优化</b><small>只修改一个商品</small></button></div>}<label>{taskMode === "new-variant" ? "父体 ASIN" : optimizeScope === "batch" ? "需要批量优化的子体 ASIN（最多 100 个）" : optimizeScope === "single" ? "需要修改的子体 ASIN" : "父体 ASIN"}</label><div className={`asinActionRow ${optimizeScope === "batch" && taskMode === "optimize" ? "batchAsinActionRow" : ""}`}>{optimizeScope === "batch" && taskMode === "optimize" ? <textarea value={batchChildAsins} onChange={e => {setBatchChildAsins(e.target.value.toUpperCase());setProduct(null);setMainChildAsin("");setSelectedChildAsins([]);resetDiscovery();}} placeholder={"一行一个，也可用逗号分隔\nB0XXXXXXXX\nB0YYYYYYYY"} /> : <input value={asin} maxLength={10} onChange={e => {setAsin(e.target.value.toUpperCase().replace(/\s/g, ""));setProduct(null);setMainChildAsin("");setSelectedChildAsins([]);resetDiscovery();}} placeholder="例如 B0XXXXXXXX" />}<select value={marketplace} onChange={e => {setMarketplace(e.target.value);resetDiscovery();}}><option value="US">美国站</option><option value="UK">英国站</option><option value="DE">德国站</option><option value="JP">日本站</option></select><button className="readProductButton" disabled={loading === "product"}>{loading === "product" ? "正在读取…" : taskMode === "new-variant" ? "读取父体资料 →" : optimizeScope === "batch" ? "批量读取子体资料 →" : optimizeScope === "single" ? "读取子体资料 →" : "读取父体资料 →"}</button></div>{optimizeScope === "batch" && taskMode === "optimize" && <small className="batchAsinHint">支持换行、空格或逗号分隔；读取成功后仍可在下方取消或补选子体。</small>}{product && <div className="targetMini">{product.images[0] && <img src={product.images[0]} alt="" />}<span><b>{product.title}</b><small>{product.asin} · {product.price || "价格未展示"} · 五点 {product.bullets.length} 条{taskMode !== "new-product" ? ` · 已读取 ${product.variants.length} 个子体；这些 ASIN 会全部排除` : ""}</small></span></div>}</form>}
             <label className="imageSource"><span>{taskMode === "new-product" ? "上传产品主图（强烈建议）" : "上传产品部资料图"}</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={uploadImage} />{imagePreview ? <img src={imagePreview} alt="上传预览" /> : <div><b>＋ 选择产品图</b><small>{taskMode === "new-product" ? "在本机与竞品多图比较轮廓、纹理和颜色；最大 8 MB" : "用于补充产品外观资料"}</small></div>}</label>
           </div>
           <div className={`sourceStatus ${loading === "product" ? "working" : sourceReady ? "success" : "notice"}`}><i /> <span>{sourceMessage}</span></div>
           {taskMode === "optimize" && product && <div className="parentVariantWorkbench">
-            <div className="parentVariantHead"><div><span>{optimizeScope === "family" ? "父体批量优化" : "单子体优化"}</span><b>{optimizeScope === "family" ? "确认主推子体与尺寸范围" : "确认本次要修改的子体"}</b><small>月销量只是公开页面信号；无信号或信号接近时，以你的人工选择为准。</small></div><div><b>{optimizeSizes.length}</b><span>{optimizeScope === "family" ? "个尺寸将生成标题" : "个子体将生成标题"}</span></div></div>
-            <div className="variantChoiceGrid">{product.variants.map(variant => <label className={variant.asin === mainChildAsin ? "selected" : ""} key={variant.asin}>
-              <input type="radio" name="main-child" checked={variant.asin === mainChildAsin} onChange={() => {
+            <div className="parentVariantHead"><div><span>{optimizeScope === "family" ? "父体批量优化" : optimizeScope === "batch" ? "批量子体优化" : "单子体优化"}</span><b>{optimizeScope === "family" ? "确认主推子体与尺寸范围" : optimizeScope === "batch" ? "勾选本次要优化的多个子体" : "确认本次要修改的子体"}</b><small>月销量只是公开页面信号；无信号或信号接近时，以你的人工选择为准。</small></div><div><b>{optimizeScope === "batch" ? selectedChildAsins.length : optimizeSizes.length}</b><span>{optimizeScope === "family" ? "个尺寸将生成标题" : "个子体将生成标题"}</span></div></div>
+            {optimizeScope === "batch" && <div className="variantBatchActions"><button type="button" onClick={() => setSelectedChildAsins(product.variants.map(item => item.asin))}>全选</button><button type="button" onClick={() => setSelectedChildAsins([])}>清空</button></div>}
+            <div className="variantChoiceGrid">{product.variants.map(variant => <label className={(optimizeScope === "batch" ? selectedChildAsins.includes(variant.asin) : variant.asin === mainChildAsin) ? "selected" : ""} key={variant.asin}>
+              <input type={optimizeScope === "batch" ? "checkbox" : "radio"} name={optimizeScope === "batch" ? undefined : "main-child"} checked={optimizeScope === "batch" ? selectedChildAsins.includes(variant.asin) : variant.asin === mainChildAsin} onChange={() => {
+                if (optimizeScope === "batch") {
+                  setSelectedChildAsins(current => current.includes(variant.asin) ? current.filter(value => value !== variant.asin) : [...current, variant.asin]);
+                  resetDiscovery();
+                  return;
+                }
                 setMainChildAsin(variant.asin);
                 const inferred = inferProductFacts(variant.title || product.title, variant.bullets || product.bullets);
                 setFacts(current => ({...current, category:inferred.category || current.category, material:inferred.material || current.material, style:inferred.style || current.style, useCase:inferred.useCase || current.useCase, mustHave:inferred.mustHave || current.mustHave}));
@@ -888,7 +953,7 @@ export default function MarketWorkspace() {
               <em>{variant.monthly_sales_estimate ? `${variant.monthly_sales_estimate.toLocaleString()}+ / 月` : variant.recent_sales_signal || "月销量信号未知"}</em>
               {variant.is_suspected_main && <i>系统推荐</i>}
             </label>)}</div>
-            <p>{optimizeScope === "family" ? "同一尺寸有多个颜色时，只选销量信号最好的子体作为该尺寸事实样本；最终覆盖父体下全部不同尺寸。" : "本轮只生成所选子体的标题，不会连带修改父体下其他尺寸。"}</p>
+            <p>{optimizeScope === "family" ? "同一尺寸有多个颜色时，只选销量信号最好的子体作为该尺寸事实样本；最终覆盖父体下全部不同尺寸。" : optimizeScope === "batch" ? "每个勾选子体都会独立使用自己的标题、五点、颜色和尺寸生成，不会把颜色与尺寸交叉组合。" : "本轮只生成所选子体的标题，不会连带修改父体下其他尺寸。"}</p>
           </div>}
           {taskMode !== "optimize" && <div className="variantTitleInputs" id="variant-title-inputs">
             <div className="variantIntro"><b>{taskMode === "new-product" ? "新品颜色与尺寸" : "新增标题变量"}</b><span>一行一个；系统按颜色 × 尺寸生成标题。{taskMode === "new-product" ? "尺寸会决定类目词和市场使用场景。" : "新 ASIN 由商品在 Amazon 创建后产生，此处不需要填写。"}</span></div>
@@ -902,7 +967,7 @@ export default function MarketWorkspace() {
         <article className="panel discoverPanel" id="competitor-discovery">
           <div className="panelHead"><div><h3>3. 先确认方案，再发现竞品</h3><p>系统先整理画像和分层搜索词；你确认后才访问 Amazon{backendVersion && <em className="backendVersion"> · 本机 v{backendVersion}</em>}</p></div><div className="discoverActions"><button onClick={prepareSearchPlan} disabled={loading === "plan"}>{loading === "plan" ? "正在整理…" : searchPlan ? "重新生成搜索方案" : "生成搜索方案"}</button></div></div>
           <div className="competitorRules"><b>产品相似度</b><span>产品类型 35%</span><span>真实属性 30%</span><span>标题特征证据 15%</span><span>图片外观 20%</span><b>市场价值另算</b><span>销量、评价与价格只用于排序，不增加产品相似度</span><small>先硬性排除非同产品类型和确认的排除项，再计算相似度；每个竞品品牌只保留 1 款。</small></div>
-          {searchPlan && <div className="discoveryProfile"><div><b>待确认的本品画像</b><p>{searchPlan.features.length ? searchPlan.features.join(" · ") : "暂未识别到稳定特征，请核对直接竞品定义。"}</p></div><label><b>产品类型（硬门槛）</b><input value={searchPlan.productType} onChange={event => setSearchPlan({...searchPlan, productType:event.target.value})} /></label><label><b>直接竞品定义</b><textarea value={searchPlan.directDefinition} onChange={event => setSearchPlan({...searchPlan, directDefinition:event.target.value})} /></label><div className="weightedQueryEditor"><b>确认搜索词——人工可手动赋予权重</b><div className="queryWeightHead"><span>启用</span><span>搜索词</span><span>权重</span><span /></div>{weightedQueries.map((item, index) => <div className="queryWeightRow" key={index}><input type="checkbox" checked={item.enabled} onChange={event => setWeightedQueries(current => current.map((value, position) => position === index ? {...value, enabled:event.target.checked} : value))} /><input value={item.query} onChange={event => setWeightedQueries(current => current.map((value, position) => position === index ? {...value, query:event.target.value} : value))} /><label><input type="number" min="0" max="100" value={item.weight} onChange={event => setWeightedQueries(current => current.map((value, position) => position === index ? {...value, weight:Math.max(0, Math.min(100, Number(event.target.value) || 0))} : value))} /><span>%</span></label><button onClick={() => setWeightedQueries(current => current.filter((_, position) => position !== index))}>删除</button></div>)}<button className="addQueryRow" onClick={() => setWeightedQueries(current => [...current, {query:"", weight:5, enabled:true}])}>＋ 添加搜索词</button><small>权重决定各搜索组进入候选池的名额比例；无需合计为 100，系统会自动按比例换算。</small></div><label><b>必须排除的商品词（一行一个）</b><textarea value={searchPlan.excludedTerms} onChange={event => setSearchPlan({...searchPlan, excludedTerms:event.target.value})} placeholder={"dish drying rack\nfaucet mat"} /></label><small>{searchPlan.guidance.join(" ")}</small><div className="discoverActions"><label>Amazon 翻页<select value={searchPages} onChange={e => setSearchPages(Number(e.target.value))}><option value={1}>1 页</option><option value={2}>2 页</option><option value={3}>3 页</option></select></label><label><input type="checkbox" checked={verifyDetailPages} onChange={e => setVerifyDetailPages(e.target.checked)} />短名单详情页复核</label><label>最多保留<select value={resultLimit} onChange={e => setResultLimit(Number(e.target.value))}><option value={24}>24 个</option><option value={40}>40 个</option><option value={60}>60 个</option></select></label><button onClick={discover} disabled={loading === "discover"}>{loading === "discover" ? "正在搜索…" : "确认方案并搜索竞品"}</button></div></div>}
+          {searchPlan && <div className="discoveryProfile"><div><b>待确认的本品画像</b><p>{searchPlan.features.length ? searchPlan.features.join(" · ") : "暂未识别到稳定特征，请核对直接竞品定义。"}</p></div><label><b>产品类型（硬门槛）</b><input value={searchPlan.productType} onChange={event => setSearchPlan({...searchPlan, productType:event.target.value})} /></label><label><b>直接竞品定义</b><textarea value={searchPlan.directDefinition} onChange={event => setSearchPlan({...searchPlan, directDefinition:event.target.value})} /></label><div className="weightedQueryEditor"><b>确认搜索词——人工可手动赋予权重</b><div className="queryWeightHead"><span>启用</span><span>搜索词</span><span>权重</span><span /></div>{weightedQueries.map((item, index) => <div className="queryWeightRow" key={index}><input type="checkbox" checked={item.enabled} onChange={event => setWeightedQueries(current => current.map((value, position) => position === index ? {...value, enabled:event.target.checked} : value))} /><input value={item.query} onChange={event => setWeightedQueries(current => current.map((value, position) => position === index ? {...value, query:event.target.value} : value))} /><label><input type="number" min="0" max="100" value={item.weight} onChange={event => setWeightedQueries(current => current.map((value, position) => position === index ? {...value, weight:Math.max(0, Math.min(100, Number(event.target.value) || 0))} : value))} /><span>%</span></label><button type="button" onClick={() => setWeightedQueries(current => current.filter((_, position) => position !== index))}>删除</button></div>)}<button type="button" className="addQueryRow" onClick={() => setWeightedQueries(current => [...current, {query:"", weight:5, enabled:true}])}>＋ 添加搜索词</button><small>权重决定各搜索组进入候选池的名额比例；无需合计为 100，系统会自动按比例换算。</small></div><label><b>必须排除的商品词（一行一个）</b><textarea value={searchPlan.excludedTerms} onChange={event => setSearchPlan({...searchPlan, excludedTerms:event.target.value})} placeholder={"dish drying rack\nfaucet mat"} /></label><small>{searchPlan.guidance.join(" ")}</small><div className="discoveryLaunchBar"><div className="discoveryOptions"><label><span>Amazon 翻页</span><select value={searchPages} onChange={e => setSearchPages(Number(e.target.value))}><option value={1}>1 页</option><option value={2}>2 页</option><option value={3}>3 页</option></select></label><label className="detailVerifyOption"><input type="checkbox" checked={verifyDetailPages} onChange={e => setVerifyDetailPages(e.target.checked)} /><span><b>详情页复核</b><small>更准确，但搜索时间更长</small></span></label></div><button type="button" className="discoverPrimaryButton" onClick={discover} disabled={loading === "discover"}><span>{loading === "discover" ? "正在搜索 Amazon…" : "确认方案并搜索竞品"}</span><i>→</i></button></div></div>}
           {searchPlan && <label className="candidateLimitToggle">最终候选上限<select value={resultLimit} onChange={event => setResultLimit(Number(event.target.value))}><option value={24}>24 个</option><option value={40}>40 个</option><option value={60}>60 个</option><option value={100}>100 个</option></select><small>这是上限，不足时不会用低相关商品凑数。</small></label>}
           {discoveryMeta && <div className="discoveryProfile"><b>本轮候选漏斗</b><p>搜索页卡片 {discoveryMeta.cards} 条 → 去重后 {discoveryMeta.unique} 个 ASIN → 权重候选池 {discoveryMeta.pool} 个 → 最终 {candidates.length} 个品牌代表商品</p><small>排除：本品家族结果 {discoveryMeta.ownResults} 条、本品牌 {discoveryMeta.sameBrand} 条、排除词 {discoveryMeta.termFiltered} 条、产品类型不符 {discoveryMeta.typeFiltered} 个；同品牌合并 {discoveryMeta.collapsed} 个。设置100代表最多保留100个，不会绕过这些规则补足数量。</small></div>}
           <div className="manualCompetitors"><textarea value={manualAsins} onChange={e => setManualAsins(e.target.value)} placeholder={"也可以一行一个批量添加竞品 ASIN\nB0XXXXXXXX\nB0YYYYYYYY"} /><button onClick={addManual} disabled={loading === "manual"}>{loading === "manual" ? "读取中…" : "添加人工竞品"}</button></div>
@@ -922,10 +987,10 @@ export default function MarketWorkspace() {
           {abaSummary && <div className={abaSummary.valid ? "fileInspection success" : "fileInspection error"}><b>{abaSummary.valid ? `✓ 已识别 ${abaSummary.rows} 个关键词` : "ABA 词库未通过校验"}</b><span>{abaSummary.keyword_column ? `关键词列：${abaSummary.keyword_column}` : "未找到关键词列"}{abaSummary.volume_columns.length ? ` · 搜索量列：${abaSummary.volume_columns.join("、")}` : " · 未找到搜索量列"}{abaSummary.sheet ? ` · 工作表：${abaSummary.sheet}` : ""}</span>{abaSummary.warnings.map(warning => <small key={warning}>{warning}</small>)}</div>}
           {negativeSummary && <div className={negativeSummary.valid ? "fileInspection success" : "fileInspection error"}><b>{negativeSummary.valid ? `✓ 已载入 ${negativeSummary.rows} 个否词` : "否词词库未通过校验"}</b><span>命中后将从标题和广告词包中硬拦截。</span></div>}
         </article>
-        <div className={`nextPhase ${nextBlockers.length ? "hasBlockers" : ""}`}><div><b>下一步：竞品标题结构、关键词池与标题候选</b><span>{nextBlockers.length ? `还需完成：${nextBlockers.join("；")}` : taskMode !== "optimize" ? `资料完整，可为 ${titleCount} 个颜色/尺寸组合进入研究。` : optimizeScope === "family" ? `资料完整，可为父体下 ${titleCount} 个尺寸进入研究。` : "资料完整，可进入当前子体标题研究。"}</span>{nextNotice && <small>{nextNotice}</small>}</div><button onClick={enterResearch}>{researchStarted ? "✓ 已进入标题研究" : nextBlockers.length ? "查看待完成项 →" : "进入真实标题研究 →"}</button></div>
+        <div className={`nextPhase ${nextBlockers.length ? "hasBlockers" : ""}`}><div><b>下一步：竞品标题结构、关键词池与标题候选</b><span>{nextBlockers.length ? `还需完成：${nextBlockers.join("；")}` : taskMode !== "optimize" ? `资料完整，可为 ${titleCount} 个颜色/尺寸组合进入研究。` : optimizeScope === "family" ? `资料完整，可为父体下 ${titleCount} 个尺寸进入研究。` : optimizeScope === "batch" ? `资料完整，可为已选 ${titleCount} 个子体进入研究。` : "资料完整，可进入当前子体标题研究。"}</span>{nextNotice && <small>{nextNotice}</small>}</div><button onClick={enterResearch}>{researchStarted ? "✓ 已进入标题研究" : nextBlockers.length ? "查看待完成项 →" : "进入真实标题研究 →"}</button></div>
         {researchStarted && <article className="panel researchPanel" id="title-research">
           <div className="panelHead"><div><h3>5. 真实标题研究</h3><p>本轮研究输入已锁定；点击生成后才会产生标题，结果仍需人工编辑和确认。</p></div><span className="selectedCount">{generatedTitles.length ? `已生成 ${generatedTitles.length} 个` : "等待生成"}</span></div>
-          <div className="researchInputs"><div><span>本品</span><b>{product?.asin || "全新商品 · 暂无 ASIN"}</b><small>{product?.title || [facts.brand, facts.productName || facts.category].filter(Boolean).join(" ")}</small></div><div><span>竞品</span><b>{selected.length} 个已锁定</b><small>生成时优先匹配同尺寸竞品</small></div><div><span>ABA 词库</span><b>{abaSummary?.rows || 0} 个关键词</b><small>{abaSummary?.volume_columns.length ? `已识别 ${abaSummary.volume_columns.length} 个搜索量字段` : "未识别搜索量字段"}</small></div><div><span>标题任务</span><b>{taskMode === "new-product" ? `${titleCount} 个全新商品组合` : taskMode === "new-variant" ? `${titleCount} 个新增变体组合` : optimizeScope === "family" ? `${titleCount} 个现有尺寸` : "优化当前子体"}</b><small>{titleFormat === "split" ? "二段标题制式" : "原标题制式"}</small></div></div>
+          <div className="researchInputs"><div><span>本品</span><b>{product?.asin || "全新商品 · 暂无 ASIN"}</b><small>{product?.title || [facts.brand, facts.productName || facts.category].filter(Boolean).join(" ")}</small></div><div><span>竞品</span><b>{selected.length} 个已锁定</b><small>生成时优先匹配同尺寸竞品</small></div><div><span>ABA 词库</span><b>{abaSummary?.rows || 0} 个关键词</b><small>{abaSummary?.volume_columns.length ? `已识别 ${abaSummary.volume_columns.length} 个搜索量字段` : "未识别搜索量字段"}</small></div><div><span>标题任务</span><b>{taskMode === "new-product" ? `${titleCount} 个全新商品组合` : taskMode === "new-variant" ? `${titleCount} 个新增变体组合` : optimizeScope === "family" ? `${titleCount} 个现有尺寸` : optimizeScope === "batch" ? `${titleCount} 个已选子体` : "优化当前子体"}</b><small>{titleFormat === "split" ? "二段标题制式" : "原标题制式"}</small></div></div>
           <div className="generateAction"><div><b>{keywordSelections.length ? "关键词方案待确认" : "先制定关键词布置方案"}</b><span>高流量场景词在事实和尺寸匹配时可以进入主标题；普通表达少用连接词，已确认流量短语中的 for 保留。</span></div><button onClick={analyzeKeywordPlan} disabled={loading === "keyword-plan"}>{loading === "keyword-plan" ? "分析中…" : keywordSelections.length ? "重新分析关键词" : "分析并布置关键词"}</button></div>
           {keywordPlanMessage && <div className="keywordPlanMessage">{keywordPlanMessage}</div>}
           {!!keywordAnalysis.length && <section className="titleResearchReport">

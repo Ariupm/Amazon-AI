@@ -205,6 +205,31 @@ class TitleGeneratorTests(unittest.TestCase):
         self.assertTrue(any("Non Slip = Non Skid" in item for item in result.semantic_clusters))
         self.assertTrue(any("Rubber Backing（独立属性" in item for item in result.semantic_clusters))
 
+    def test_non_rug_inches_keep_category_and_use_market_scene_evidence(self):
+        result = generate_titles(TitleGenerateRequest(
+            brand="BrandX",
+            product_title="BrandX Absorbent Dish Drying Mat",
+            competitor_titles_by_size={
+                "16x18": [
+                    "BrandA Dish Drying Mat 16 x 18 for Kitchen Counter",
+                    "BrandB Absorbent Drying Mat for Sink Side Coffee Bar",
+                ],
+            },
+            keywords=[
+                KeywordEntry(term="dish drying mat", volume=90000),
+                KeywordEntry(term="dish drying mat for kitchen counter", volume=50000),
+                KeywordEntry(term="area rugs for living room", volume=100000),
+            ],
+            category="Dish Drying Mat",
+            sizes=["16x18"],
+        ))
+        scenario = result.size_scenarios[0]
+        self.assertEqual(scenario.product_type, "Dish Drying Mat")
+        self.assertIn("Kitchen Counter", scenario.primary_scenes)
+        self.assertIn("16 × 18 in", scenario.reasoning)
+        self.assertNotIn("area rugs for living room", [item.term for item in result.keyword_analysis])
+        self.assertTrue(all("Area Rug" not in item.full_title for item in result.candidates))
+
 
 if __name__ == "__main__":
     unittest.main()
